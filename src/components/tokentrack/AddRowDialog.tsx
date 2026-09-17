@@ -20,22 +20,6 @@ interface Props {
   onClose: () => void;
 }
 
-<<<<<<< HEAD
-=======
-/**
- * Converts a 4-digit HHMM string (e.g. "2200") to "HH:mm" ("22:00").
- * Returns "" for invalid/empty/partial input.
- * Validates hours 00-23 and minutes 00-59.
- */
-function hhmmToTime(hhmm: string): string {
-  if (hhmm.length !== 4) return "";
-  const h = parseInt(hhmm.slice(0, 2), 10);
-  const m = parseInt(hhmm.slice(2), 10);
-  if (h > 23 || m > 59) return "";
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
 export function AddRowDialog({ platform, date, onClose }: Props) {
   const { addRow, lastEntryFor } = useTokenTrack();
   const [rowDate, setRowDate] = useState(date);
@@ -52,7 +36,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   const [voiceSupported, setVoiceSupported] = useState(false);
   const recognitionRef = useRef<any>(null);
 
-<<<<<<< HEAD
   // Session / Connection — all optional. Independent yes/no toggles plus a
   // single-choice reset count. Defaults reflect "not answered yet" for a
   // brand-new entry; nothing here ever touches historical/migrated rows,
@@ -72,11 +55,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   // Validate and normalize the 4-digit input strings to the stored no-colon HHmm form.
   const startTime = useMemo(() => normalizeHHmm(startTimeInput), [startTimeInput]);
   const endTime = useMemo(() => normalizeHHmm(endTimeInput), [endTimeInput]);
-=======
-  // Derive HH:mm values from the 4-digit input strings.
-  const startTime = useMemo(() => hhmmToTime(startTimeInput), [startTimeInput]);
-  const endTime = useMemo(() => hhmmToTime(endTimeInput), [endTimeInput]);
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
 
   // Auto-fill starting followers from the most recent saved entry for this platform.
   useEffect(() => {
@@ -92,12 +70,7 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   }, [platform.id]);
 
   useEffect(() => {
-<<<<<<< HEAD
     const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition ?? null;
-=======
-    const SR =
-      (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition ?? null;
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
     setVoiceSupported(Boolean(SR));
     return () => {
       try {
@@ -153,17 +126,11 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   // Live preview of the values that will be derived from this row.
   const previewMinutes = durationMinutes(startTime || null, endTime || null);
   const previewTimeOfDay = timeOfDayFrom(startTime || null);
-<<<<<<< HEAD
   const previewUsd =
     num(usd) ??
     (num(tokens) !== null && platform.tokenValueUsd
       ? (num(tokens) as number) * platform.tokenValueUsd
       : null);
-=======
-  const previewUsd = num(usd) ?? (num(tokens) !== null && platform.tokenValueUsd
-    ? (num(tokens) as number) * platform.tokenValueUsd
-    : null);
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
   const previewFollowerChange =
     num(followersStart) !== null && num(followersEnd) !== null
       ? (num(followersEnd) as number) - (num(followersStart) as number)
@@ -198,7 +165,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
       minutes: previewMinutes,
       tokenValueUsdAtEntry: platform.tokenValueUsd,
       note: note.trim(),
-<<<<<<< HEAD
       // Session / Connection — optional analysis fields, only ever set by
       // this form for newly-created rows.
       vpnOnAtStart,
@@ -216,9 +182,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
     if (roomCount.trim() !== "" && Number.isFinite(Number(roomCount))) {
       pushRecentValue("roomCount", platform.id, roomCount.trim());
     }
-=======
-    });
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
     onClose();
   };
 
@@ -232,15 +195,9 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
     <div className="fixed inset-0 z-100 grid place-items-center overflow-hidden bg-console/80 p-4 backdrop-blur-sm">
       <form
         onSubmit={submit}
-<<<<<<< HEAD
         className="max-h-[92vh] w-full max-w-[980px] overflow-y-auto rounded-xl border border-border bg-panel shadow-panel-lift"
       >
         <header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-panel-header px-3 py-2">
-=======
-        className="w-full max-w-[980px] rounded-xl border border-border bg-panel shadow-panel-lift"
-      >
-        <header className="flex items-center justify-between border-b border-border bg-panel-header px-3 py-2">
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
           <div>
             <p className="label-micro">New entry for</p>
             <h2 className="text-sm font-semibold">{platform.name}</h2>
@@ -271,7 +228,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
               <label className="label-micro" htmlFor="row-date">
                 Date
               </label>
-<<<<<<< HEAD
               <div className="flex items-center gap-1">
                 <button
                   type="button"
@@ -297,15 +253,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
                   <ChevronRight className="size-3.5" />
                 </button>
               </div>
-=======
-              <input
-                id="row-date"
-                type="date"
-                value={rowDate}
-                onChange={(e) => setRowDate(e.target.value)}
-                className={compactField}
-              />
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
             </div>
 
             <div>
@@ -323,7 +270,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
                 className={`${compactField} ${!startTimeValid ? "border-error" : ""}`}
                 aria-label="Start time as 4-digit 24-hour HHMM, e.g. 0900 or 2200"
               />
-<<<<<<< HEAD
               {startTime && <p className="mt-0.5 text-[9px] text-muted-foreground">{startTime}</p>}
               {recentStartTimes.values.length > 0 && (
                 <RecentChipsRow
@@ -331,10 +277,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
                   formatLabel={(v) => normalizeHHmm(v) || v}
                   onPick={(v) => setStartTimeInput(v)}
                 />
-=======
-              {startTime && (
-                <p className="mt-0.5 text-[9px] text-muted-foreground">{startTime}</p>
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
               )}
             </div>
 
@@ -353,7 +295,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
                 className={`${compactField} ${!endTimeValid ? "border-error" : ""}`}
                 aria-label="End time as 4-digit 24-hour HHMM, e.g. 1300 or 2200"
               />
-<<<<<<< HEAD
               {endTime && <p className="mt-0.5 text-[9px] text-muted-foreground">{endTime}</p>}
               {recentEndTimes.values.length > 0 && (
                 <RecentChipsRow
@@ -361,10 +302,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
                   formatLabel={(v) => normalizeHHmm(v) || v}
                   onPick={(v) => setEndTimeInput(v)}
                 />
-=======
-              {endTime && (
-                <p className="mt-0.5 text-[9px] text-muted-foreground">{endTime}</p>
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
               )}
             </div>
 
@@ -390,13 +327,7 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
                 }
               />
               {followersStartLocked && (
-<<<<<<< HEAD
                 <p className="mt-0.5 text-[9px] text-muted-foreground">From previous entry</p>
-=======
-                <p className="mt-0.5 text-[9px] text-muted-foreground">
-                  From previous entry
-                </p>
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
               )}
             </div>
 
@@ -426,12 +357,9 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
                 placeholder="0"
                 className={compactField}
               />
-<<<<<<< HEAD
               {recentRoomCounts.values.length > 0 && (
                 <RecentChipsRow values={recentRoomCounts.values} onPick={(v) => setRoomCount(v)} />
               )}
-=======
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
             </div>
 
             {/* Row 3 */}
@@ -489,13 +417,9 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
                     onClick={toggleVoice}
                     aria-label={listening ? "Stop dictation" : "Dictate notes"}
                     className={`rounded border border-border px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-<<<<<<< HEAD
                       listening
                         ? "border-token/40 text-token"
                         : "text-muted-foreground hover:text-foreground"
-=======
-                      listening ? "border-token/40 text-token" : "text-muted-foreground hover:text-foreground"
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
                     }`}
                   >
                     {listening ? <MicOff className="size-3" /> : <Mic className="size-3" />}
@@ -512,7 +436,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
               />
             </div>
 
-<<<<<<< HEAD
             {/* Session / Connection — compact, optional, sits directly above Save Entry */}
             <div className="col-span-3 rounded-md border border-border bg-console/40 p-2.5">
               <p className="label-micro mb-1.5">Session / Connection</p>
@@ -572,8 +495,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
               </div>
             </div>
 
-=======
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
             {/* Row 4 — save */}
             <div className="col-span-3 flex justify-end">
               <button
@@ -585,10 +506,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
             </div>
           </div>
 
-<<<<<<< HEAD
-=======
-
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border bg-console/60 px-3 py-1.5 text-xs">
             <div className="flex items-center gap-1.5">
               <span className="label-micro">Duration</span>
@@ -622,7 +539,6 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
     </div>
   );
 }
-<<<<<<< HEAD
 
 /**
  * Small row of quick-pick chips for a "recent values" list — most recently
@@ -733,5 +649,3 @@ function ResetCountControl({
     </div>
   );
 }
-=======
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
