@@ -1,0 +1,7 @@
+run = "npm install && npm run dev"
+entrypoint = "src/routes/index.tsx"
+modules = ["nodejs-20"]
+
+[[ports]]
+localPort = 8080
+externalPort = 80
