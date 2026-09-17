@@ -32,7 +32,6 @@ export interface Payout {
   platformId: string;
   /** ISO date (yyyy-mm-dd) of the payout. */
   date: string;
-<<<<<<< HEAD
   /** HH:mm 24h, same convention as EntryRow start/end time. Null if not recorded. */
   time: string | null;
   /** Positive USD amount withdrawn. Never stores currency symbols. */
@@ -43,10 +42,6 @@ export interface Payout {
    * this platform (e.g. BongaCams) — no conversion is invented here.
    */
   tokensAmount: number | null;
-=======
-  /** Positive USD amount withdrawn. Never stores currency symbols. */
-  amountUsd: number;
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
   /** Destination captured at payout time so history is never rewritten. */
   destination: string;
   /** USD/PHP rate captured at payout time. */
@@ -57,27 +52,20 @@ export interface Payout {
 
 export type ValueSource = "actual" | "calculated" | "estimated";
 
-<<<<<<< HEAD
 /** Selected option for EntryRow.resetCount. */
 export type ResetCount = "0" | "1" | "2" | "3" | "4+";
 
-=======
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
 export interface EntryRow {
   id: string;
   platformId: string;
   /** ISO date (yyyy-mm-dd) the record belongs to. */
   date: string;
-<<<<<<< HEAD
   /**
    * Session start/end as 24h "HHmm" with no colon, e.g. "2200", "0000"
    * — this is the recorded/stored form. Older rows saved before this
    * convention may still have a colon ("22:00"); every time calculation
    * in the app tolerates both, but new entries are always no-colon.
    */
-=======
-  /** Session start/end as HH:mm (24h). Optional for legacy rows. */
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
   startTime?: string | null;
   endTime?: string | null;
   /** Derived from start time (Morning/Afternoon/Evening/Night). Never entered manually. */
@@ -96,7 +84,6 @@ export interface EntryRow {
   /** Rate captured at entry time so history is never rewritten. */
   tokenValueUsdAtEntry: number | null;
   note: string;
-<<<<<<< HEAD
   /**
    * Session / Connection — optional, independent yes/no facts about the
    * session captured from the Add New Row form, for later analysis against
@@ -113,8 +100,6 @@ export interface EntryRow {
   streamMasterProblem?: boolean | null;
   /** Single-choice reset count for the session; null/undefined means not answered. */
   resetCount?: ResetCount | null;
-=======
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
   /** Where the record came from. Manual rows are provisional until verified. */
   origin: RecordOrigin;
   /** True only when the figures came from (or were confirmed by) platform data. */
@@ -145,7 +130,3 @@ export interface DerivedRow extends EntryRow {
   /** USD earned per hour of session time; null when duration is zero. */
   usdPerHour: number | null;
 }
-<<<<<<< HEAD
-=======
-
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e

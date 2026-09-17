@@ -17,11 +17,7 @@ const STATUS_STYLES: Record<Platform["status"], string> = {
   inactive: "text-status-retired border-status-retired/30 bg-status-retired/10",
 };
 
-<<<<<<< HEAD
 const PANEL_WIDTH = 340;
-=======
-const PANEL_WIDTH = 380;
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
 
 interface Props {
   platform: Platform;
@@ -44,7 +40,6 @@ export function PlatformPanel({
   onFocus,
   zIndex,
 }: Props) {
-<<<<<<< HEAD
   const { currentFollowersFor, currentTokensFor, usdPhpRate, setPanel } = useTokenTrack();
   const followers = currentFollowersFor(platform.id);
   // Unpaid token balance: tokens earned minus tokens already covered by
@@ -52,14 +47,6 @@ export function PlatformPanel({
   // (see store.tsx) — reused as-is, not recalculated here.
   const unpaidTokens = currentTokensFor(platform.id);
   const unpaidUsd = unpaidTokens * (platform.tokenValueUsd ?? 0);
-=======
-  const { currentTotalFor, currentFollowersFor, totalTokensFor, totalUsdFor, usdPhpRate, setPanel } =
-    useTokenTrack();
-  const currentTotal = currentTotalFor(platform.id);
-  const followers = currentFollowersFor(platform.id);
-  const totalTokens = totalTokensFor(platform.id);
-  const totalUsdEarned = totalUsdFor(platform.id);
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
   const ref = useRef<HTMLElement | null>(null);
   const [dragging, setDragging] = useState(false);
   const [pos, setPos] = useState({ x: layout.x, y: layout.y });
@@ -151,7 +138,6 @@ export function PlatformPanel({
         </div>
       </header>
 
-<<<<<<< HEAD
       <div className={cn("space-y-3 p-3.5", dimmed && "opacity-60")}>
         <div>
           <p className="label-micro">Tokens since last payout</p>
@@ -161,34 +147,10 @@ export function PlatformPanel({
           <p className="numeric mt-1 text-sm font-semibold leading-none">{fmtUsd(unpaidUsd)}</p>
           <p className="numeric mt-0.5 text-xs leading-none text-muted-foreground">
             {fmtPhp(unpaidUsd * usdPhpRate)}
-=======
-      <div className={cn("space-y-4 p-4", dimmed && "opacity-60")}>
-        <div>
-          <p className="label-micro">Current total</p>
-          <p className="numeric text-4xl font-semibold leading-none">{fmtUsd(currentTotal)}</p>
-          <p className="numeric mt-1 text-lg font-semibold leading-none text-token">
-            {fmtPhp(currentTotal * usdPhpRate)}
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
           </p>
           <p className="mt-1 text-[11px] text-muted-foreground">Unpaid balance</p>
         </div>
 
-<<<<<<< HEAD
-=======
-        <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-lg border border-border bg-console/60 px-3 py-2">
-            <p className="label-micro">Total tokens earned</p>
-            <p className="numeric text-sm text-token">
-              {totalTokens > 0 ? fmtNum(totalTokens) : "—"}
-            </p>
-          </div>
-          <div className="rounded-lg border border-border bg-console/60 px-3 py-2">
-            <p className="label-micro">Total USD earned</p>
-            <p className="numeric text-sm">{fmtUsd(totalUsdEarned)}</p>
-          </div>
-        </div>
-
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
         <div className="flex items-center justify-between rounded-lg border border-border bg-console/60 px-3 py-2">
           <div>
             <p className="label-micro">Followers</p>

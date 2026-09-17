@@ -9,7 +9,6 @@ interface Props {
   onClose: () => void;
 }
 
-<<<<<<< HEAD
 const nowHHmm = () => new Date().toISOString().slice(11, 16);
 
 export function AddPayoutDialog({ platform, date, onClose }: Props) {
@@ -18,33 +17,21 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
   const [payoutTime, setPayoutTime] = useState(nowHHmm());
   const [amount, setAmount] = useState("");
   const [tokensAmount, setTokensAmount] = useState("");
-=======
-export function AddPayoutDialog({ platform, date, onClose }: Props) {
-  const { addPayout, currentTotalFor, usdPhpRate } = useTokenTrack();
-  const [payoutDate, setPayoutDate] = useState(date);
-  const [amount, setAmount] = useState("");
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const balance = currentTotalFor(platform.id);
-<<<<<<< HEAD
   const tokenBalance = currentTokensFor(platform.id);
   const parsed = Number(amount);
   const parsedTokens = tokensAmount.trim() === "" ? null : Number(tokensAmount);
   const valid = amount.trim() !== "" && Number.isFinite(parsed) && parsed > 0;
   const tokensValid = parsedTokens === null || (Number.isFinite(parsedTokens) && parsedTokens >= 0);
-=======
-  const parsed = Number(amount);
-  const valid = amount.trim() !== "" && Number.isFinite(parsed) && parsed > 0;
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
 
   const save = () => {
     if (!valid) {
       setError("Enter a valid payout amount greater than zero.");
       return;
     }
-<<<<<<< HEAD
     if (!tokensValid) {
       setError("Tokens must be zero or a positive number, or left blank.");
       return;
@@ -57,9 +44,6 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
       tokensAmount: parsedTokens,
       note,
     });
-=======
-    addPayout({ platformId: platform.id, date: payoutDate, amountUsd: parsed, note });
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
     onClose();
   };
 
@@ -91,7 +75,6 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
             <div className="text-right">
               <p className="label-micro">Current total</p>
               <p className="numeric text-sm">{fmtUsd(balance)}</p>
-<<<<<<< HEAD
               <p className="numeric text-[10px] text-token">
                 {tokenBalance > 0 ? `${tokenBalance} tokens` : ""}
               </p>
@@ -99,12 +82,6 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-=======
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
             <label className="block">
               <span className="label-micro">Date</span>
               <input
@@ -115,7 +92,6 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
               />
             </label>
             <label className="block">
-<<<<<<< HEAD
               <span className="label-micro">Time</span>
               <input
                 type="time"
@@ -125,8 +101,6 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
               />
             </label>
             <label className="block">
-=======
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
               <span className="label-micro">Payout USD</span>
               <input
                 type="number"
@@ -145,7 +119,6 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
           </div>
 
           <label className="block">
-<<<<<<< HEAD
             <span className="label-micro">Tokens (optional)</span>
             <input
               type="number"
@@ -163,8 +136,6 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
           </label>
 
           <label className="block">
-=======
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
             <span className="label-micro">Note</span>
             <input
               value={note}
@@ -192,11 +163,7 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
             <button
               type="button"
               onClick={save}
-<<<<<<< HEAD
               disabled={!valid || !tokensValid}
-=======
-              disabled={!valid}
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
               className="rounded bg-secondary px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-foreground disabled:opacity-40"
             >
               Save payout
