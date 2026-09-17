@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-<<<<<<< HEAD
 import { Check, ChevronLeft, ChevronRight, Mic, MicOff, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -13,10 +12,6 @@ import {
   useTokenTrack,
 } from "@/lib/tokentrack/store";
 import { pushRecentValue, useRecentValues } from "@/lib/tokentrack/recentValues";
-=======
-import { Mic, MicOff, X } from "lucide-react";
-import { durationMinutes, fmtHours, fmtUsd, timeOfDayFrom, useTokenTrack } from "@/lib/tokentrack/store";
->>>>>>> bf4d284f8dfaffbf2178ff5d6a519c85c65e128e
 import type { Platform } from "@/lib/tokentrack/types";
 
 interface Props {
