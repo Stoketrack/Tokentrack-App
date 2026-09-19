@@ -185,6 +185,23 @@ export function Analytics() {
     [seriesPoints],
   );
 
+  // A running (cumulative) total across all selected platforms, for the
+  // growth-trend chart below. Only meaningful for quantities that add up
+  // over time (USD, tokens, hours, follower change) — a per-hour rate
+  // can't be sensibly "accumulated", so that case is handled separately
+  // where this is rendered.
+  const isCumulativeMetric =
+    metric === "usd" || metric === "tokens" || metric === "hours" || metric === "followers";
+
+  const cumulativeData = useMemo(() => {
+    let running = 0;
+    return seriesPoints.map((p) => {
+      const dayTotal = selectedIds.reduce((sum, id) => sum + (p.values[id] ?? 0), 0);
+      running += dayTotal;
+      return { label: p.label, total: running };
+    });
+  }, [seriesPoints, selectedIds]);
+
   const chartConfig = useMemo(() => {
     const cfg: ChartConfig = {};
     selectedIds.forEach((id, i) => {
@@ -196,6 +213,11 @@ export function Analytics() {
     });
     return cfg;
   }, [selectedIds, platforms]);
+
+  const cumulativeChartConfig = useMemo<ChartConfig>(
+    () => ({ total: { label: "All selected platforms, combined", color: "#34d399" } }),
+    [],
+  );
 
   const togglePlatform = (id: string) => {
     setSelected((cur) => {
@@ -381,6 +403,48 @@ export function Analytics() {
                   isAnimationActive={false}
                 />
               ))}
+            </LineChart>
+          </ChartContainer>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-border bg-panel p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <p className="label-micro">Growth trend — cumulative {METRIC_LABELS[metric].toLowerCase()}</p>
+          <p className="text-[10px] text-muted-foreground">
+            Bucketed by {granularity} · {start} → {end}
+          </p>
+        </div>
+        {!isCumulativeMetric ? (
+          <p className="py-16 text-center text-xs text-muted-foreground">
+            A per-hour rate can't be meaningfully accumulated — switch the metric above to USD,
+            Tokens, Hours, or Followers to see the running growth total.
+          </p>
+        ) : cumulativeData.length === 0 || selectedIds.length === 0 ? (
+          <p className="py-16 text-center text-xs text-muted-foreground">
+            No sessions logged for this range/platform selection yet.
+          </p>
+        ) : (
+          <ChartContainer config={cumulativeChartConfig} className="aspect-auto h-[220px] w-full">
+            <LineChart data={cumulativeData} margin={{ left: 4, right: 12, top: 8, bottom: 0 }}>
+              <CartesianGrid vertical={false} strokeDasharray="3 3" />
+              <XAxis
+                dataKey="label"
+                tickLine={false}
+                axisLine={false}
+                tickMargin={8}
+                fontSize={11}
+              />
+              <YAxis tickLine={false} axisLine={false} width={48} fontSize={11} />
+              <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
+              <Line
+                type="monotone"
+                dataKey="total"
+                stroke="var(--color-total)"
+                strokeWidth={2.5}
+                dot={false}
+                isAnimationActive={false}
+              />
             </LineChart>
           </ChartContainer>
         )}

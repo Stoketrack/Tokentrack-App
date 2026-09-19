@@ -144,8 +144,9 @@ export interface PlatformMovement {
 
 /** The immediately preceding period of the same length, for a like-for-like comparison. */
 export function previousPeriod(start: string, end: string): { start: string; end: string } {
-  const s = new Date(`${start}T00:00:00`);
-  const e = new Date(`${end}T00:00:00`);
+  // UTC-safe parsing, same fix and same reason as daysBetweenInclusive above.
+  const s = new Date(start);
+  const e = new Date(end);
   const spanDays = Math.round((e.getTime() - s.getTime()) / 86400000) + 1;
   const prevEnd = new Date(s.getTime() - 86400000);
   const prevStart = new Date(prevEnd.getTime() - (spanDays - 1) * 86400000);
@@ -208,8 +209,12 @@ export type BucketGranularity = "day" | "week" | "month";
 
 function daysBetweenInclusive(start: string, end: string): string[] {
   const out: string[] = [];
-  let d = new Date(`${start}T00:00:00`);
-  const endD = new Date(`${end}T00:00:00`);
+  // Date-only strings parse as UTC midnight per spec (unlike "...T00:00:00",
+  // which parses as LOCAL midnight) — matching store.tsx's shiftDateUTC
+  // convention exactly, so a bucket for "2026-09-19" always stays labeled
+  // "2026-09-19" regardless of the browser's timezone offset.
+  let d = new Date(start);
+  const endD = new Date(end);
   // Guard against a corrupt/reversed range running away.
   let safety = 0;
   while (d <= endD && safety < 3660) {
@@ -230,9 +235,11 @@ export function pickGranularity(start: string, end: string): BucketGranularity {
 function bucketKeyFor(date: string, granularity: BucketGranularity): string {
   if (granularity === "day") return date;
   if (granularity === "month") return date.slice(0, 7);
-  const d = new Date(`${date}T00:00:00`);
-  const dow = d.getDay() || 7; // Monday = 1 .. Sunday = 7
-  d.setDate(d.getDate() - dow + 1);
+  // UTC-safe, matching daysBetweenInclusive — a local-time parse here would
+  // shift week-start boundaries by a day for any positive UTC-offset user.
+  const d = new Date(date);
+  const dow = d.getUTCDay() || 7; // Monday = 1 .. Sunday = 7
+  d.setUTCDate(d.getUTCDate() - dow + 1);
   return d.toISOString().slice(0, 10);
 }
 
