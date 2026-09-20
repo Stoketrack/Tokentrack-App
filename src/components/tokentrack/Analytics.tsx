@@ -185,20 +185,29 @@ export function Analytics() {
     [seriesPoints],
   );
 
-  // A running (cumulative) total across all selected platforms, for the
-  // growth-trend chart below. Only meaningful for quantities that add up
-  // over time (USD, tokens, hours, follower change) — a per-hour rate
-  // can't be sensibly "accumulated", so that case is handled separately
-  // where this is rendered.
+  // A trailing moving average across all selected platforms combined, for
+  // the growth-trend chart below. This answers "is the amount coming in
+  // each day trending higher over time" — a cumulative running total can't
+  // answer that, since it always climbs regardless of whether the daily
+  // rate is improving, flat, or shrinking; a moving average smooths out
+  // day-to-day noise so the underlying trend becomes visible.
+  // Only meaningful for quantities that can be combined across platforms
+  // by simple addition (USD, tokens, hours, follower change) — a per-hour
+  // rate can't be summed across platforms that way.
   const isCumulativeMetric =
     metric === "usd" || metric === "tokens" || metric === "hours" || metric === "followers";
 
+  const TREND_WINDOW = 7;
+
   const cumulativeData = useMemo(() => {
-    let running = 0;
-    return seriesPoints.map((p) => {
-      const dayTotal = selectedIds.reduce((sum, id) => sum + (p.values[id] ?? 0), 0);
-      running += dayTotal;
-      return { label: p.label, total: running };
+    const dayTotals = seriesPoints.map((p) =>
+      selectedIds.reduce((sum, id) => sum + (p.values[id] ?? 0), 0),
+    );
+    return seriesPoints.map((p, i) => {
+      const windowStart = Math.max(0, i - (TREND_WINDOW - 1));
+      const window = dayTotals.slice(windowStart, i + 1);
+      const average = window.reduce((s, v) => s + v, 0) / window.length;
+      return { label: p.label, average: Math.round(average * 100) / 100 };
     });
   }, [seriesPoints, selectedIds]);
 
@@ -215,7 +224,9 @@ export function Analytics() {
   }, [selectedIds, platforms]);
 
   const cumulativeChartConfig = useMemo<ChartConfig>(
-    () => ({ total: { label: "All selected platforms, combined", color: "#34d399" } }),
+    () => ({
+      average: { label: `${TREND_WINDOW}-day average, all selected platforms combined`, color: "#34d399" },
+    }),
     [],
   );
 
@@ -410,15 +421,18 @@ export function Analytics() {
 
       <div className="rounded-lg border border-border bg-panel p-4">
         <div className="mb-2 flex items-center justify-between">
-          <p className="label-micro">Growth trend — cumulative {METRIC_LABELS[metric].toLowerCase()}</p>
+          <p className="label-micro">
+            Growth trend — {TREND_WINDOW}-day average {METRIC_LABELS[metric].toLowerCase()}
+          </p>
           <p className="text-[10px] text-muted-foreground">
             Bucketed by {granularity} · {start} → {end}
           </p>
         </div>
         {!isCumulativeMetric ? (
           <p className="py-16 text-center text-xs text-muted-foreground">
-            A per-hour rate can't be meaningfully accumulated — switch the metric above to USD,
-            Tokens, Hours, or Followers to see the running growth total.
+            A per-hour rate can't be combined across multiple platforms by simple addition —
+            switch the metric above to USD, Tokens, Hours, or Followers to see the growth trend
+            across your whole lineup.
           </p>
         ) : cumulativeData.length === 0 || selectedIds.length === 0 ? (
           <p className="py-16 text-center text-xs text-muted-foreground">
@@ -439,8 +453,8 @@ export function Analytics() {
               <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
               <Line
                 type="monotone"
-                dataKey="total"
-                stroke="var(--color-total)"
+                dataKey="average"
+                stroke="var(--color-average)"
                 strokeWidth={2.5}
                 dot={false}
                 isAnimationActive={false}
