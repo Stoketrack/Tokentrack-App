@@ -103,9 +103,16 @@ export const DEFAULT_PLATFORMS: Platform[] = [
   },
 ];
 
+/**
+ * A platform's position is a grid SLOT index (its order among the six
+ * cards), not raw pixel coordinates. This is what makes "cards can't
+ * overlap or get stuck" structurally true rather than just usually true —
+ * every platform always has a distinct slot, and the actual pixel position
+ * for a given slot is computed at render time from the current column
+ * count, so it's automatically correct on any screen size.
+ */
 export interface PanelLayout {
-  x: number;
-  y: number;
+  slot: number;
   minimised: boolean;
 }
 
@@ -123,10 +130,57 @@ const RATE_CACHE_KEY = "tokentrack.fx.usdphp";
 const defaultLayout = (platforms: Platform[]): Record<string, PanelLayout> => {
   const out: Record<string, PanelLayout> = {};
   platforms.forEach((p, i) => {
-    out[p.id] = { x: (i % 3) * 360, y: Math.floor(i / 3) * 300, minimised: false };
+    out[p.id] = { slot: i, minimised: false };
   });
   return out;
 };
+
+/**
+ * Defends against two things: (a) a layout saved by the older free-pixel
+ * version of this feature (has x/y, no slot — those pixel positions are
+ * exactly the "trapped/overlapping" bug, so there's nothing worth trying
+ * to preserve from them), and (b) any other corruption — a missing entry,
+ * a duplicate slot number, a slot that's not a finite number. Anything
+ * that doesn't already look like a clean 0..n-1 permutation of slots is
+ * replaced with the default arrangement, per-field where possible so a
+ * merely-missing entry doesn't force everyone else to reset too.
+ */
+function sanitizeLayout(
+  raw: Record<string, unknown> | undefined | null,
+  platforms: Platform[],
+): Record<string, PanelLayout> {
+  const fallback = defaultLayout(platforms);
+  if (!raw || typeof raw !== "object") return fallback;
+
+  const used = new Set<number>();
+  const out: Record<string, PanelLayout> = {};
+  for (const p of platforms) {
+    const entry = (raw as Record<string, unknown>)[p.id];
+    const slot =
+      entry &&
+      typeof entry === "object" &&
+      typeof (entry as { slot?: unknown }).slot === "number" &&
+      Number.isFinite((entry as { slot: number }).slot)
+        ? (entry as { slot: number }).slot
+        : null;
+    const minimised =
+      entry && typeof entry === "object" && typeof (entry as { minimised?: unknown }).minimised === "boolean"
+        ? (entry as { minimised: boolean }).minimised
+        : false;
+    if (slot !== null && !used.has(slot)) {
+      used.add(slot);
+      out[p.id] = { slot, minimised };
+    } else {
+      out[p.id] = { slot: fallback[p.id]?.slot ?? 0, minimised };
+    }
+  }
+  // Any fallback slot already claimed by a genuinely-valid entry above
+  // would collide — cheapest safe fix is to fall back to the clean default
+  // arrangement entirely rather than trying to patch around a collision.
+  const slots = Object.values(out).map((v) => v.slot);
+  const allUnique = new Set(slots).size === slots.length;
+  return allUnique ? out : fallback;
+}
 
 const emptyState = (): PersistedState => ({
   platforms: DEFAULT_PLATFORMS,
@@ -582,6 +636,15 @@ interface StoreValue {
   deleteRow: (id: string) => void;
   updatePlatform: (id: string, patch: Partial<Platform>) => void;
   setPanel: (platformId: string, patch: Partial<PanelLayout>) => void;
+  /**
+   * Restores all six platforms to their original sequential grid slots
+   * (matching platform.slot order). Only ever touches layout — never
+   * platform settings, entries, payouts, or any other stored data. This is
+   * also the way to recover a layout that's gotten stuck/overlapping: it
+   * doesn't try to salvage the broken positions, it just puts everything
+   * back in a known-good arrangement.
+   */
+  resetLayout: () => void;
   restoreAll: () => void;
 }
 
@@ -621,12 +684,17 @@ export function TokenTrackProvider({ children }: { children: ReactNode }) {
       try {
         const layoutRaw = window.localStorage.getItem(LAYOUT_KEY);
         if (layoutRaw) {
-          layout = { ...layout, ...JSON.parse(layoutRaw) };
+          layout = sanitizeLayout(JSON.parse(layoutRaw), DEFAULT_PLATFORMS);
         } else {
           const legacyRaw = window.localStorage.getItem(STORAGE_KEY);
           if (legacyRaw) {
             const legacy = JSON.parse(legacyRaw) as Partial<PersistedState>;
-            if (legacy.layout) layout = { ...layout, ...legacy.layout };
+            if (legacy.layout) {
+              layout = sanitizeLayout(
+                legacy.layout as unknown as Record<string, unknown>,
+                DEFAULT_PLATFORMS,
+              );
+            }
           }
         }
       } catch {
@@ -1131,11 +1199,13 @@ export function TokenTrackProvider({ children }: { children: ReactNode }) {
           layout: {
             ...s.layout,
             [platformId]: {
-              ...(s.layout[platformId] ?? { x: 0, y: 0, minimised: false }),
+              ...(s.layout[platformId] ?? { slot: 0, minimised: false }),
               ...patch,
             },
           },
         })),
+      resetLayout: () =>
+        setState((s) => ({ ...s, layout: defaultLayout(s.platforms) })),
       restoreAll: () =>
         setState((s) => ({
           ...s,
