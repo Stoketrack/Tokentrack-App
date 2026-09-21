@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight, LayoutGrid, RotateCcw } from "lucide-react";
 import { PlatformPanel, PANEL_WIDTH } from "@/components/tokentrack/PlatformPanel";
@@ -68,7 +68,7 @@ function shiftDate(date: string, days: number) {
 }
 
 function Dashboard() {
-  const { platforms, layout, workingDate, setWorkingDate, setPanel, restoreAll, ready } =
+  const { platforms, layout, workingDate, setWorkingDate, setPanel, resetLayout, restoreAll, ready } =
     useTokenTrack();
   const [view, setView] = useState<string>("Dashboard");
   const [addFor, setAddFor] = useState<string | null>(null);
@@ -96,6 +96,36 @@ function Dashboard() {
   const zFor = (id: string) => 10 + Math.max(order.indexOf(id), 0);
 
   const focus = (id: string) => setOrder((o) => [...o.filter((x) => x !== id), id]);
+
+  // Responsive grid: how many cards fit per row at the current canvas size.
+  // Card position is always derived from this + each card's slot index —
+  // never a stored pixel — so it's automatically correct after a resize,
+  // an orientation change, or opening on a different device.
+  const GAP = 24;
+  const usableWidth = Math.max(bounds.width - 48, 260);
+  const columns = usableWidth < 420 ? 1 : usableWidth < 760 ? 2 : 3;
+  const cellWidth = columns === 1 ? usableWidth : PANEL_WIDTH;
+  const cellHeight = 300;
+
+  // The currently-visible cards, in their saved slot order. Minimised cards
+  // are simply left out of this list (same as before) — their slot is
+  // preserved so they reappear in the right place once un-minimised.
+  const orderedVisible = useMemo(
+    () => [...visible].sort((a, b) => (layout[a.id]?.slot ?? 0) - (layout[b.id]?.slot ?? 0)),
+    [visible, layout],
+  );
+
+  const handleReorder = (platformId: string, targetIndex: number) => {
+    const draggedLayout = layout[platformId];
+    const targetPlatform = orderedVisible[targetIndex];
+    if (!draggedLayout || !targetPlatform || targetPlatform.id === platformId) return;
+    const targetLayout = layout[targetPlatform.id];
+    if (!targetLayout) return;
+    // A straight swap of slot numbers — always a valid permutation, so two
+    // cards can never end up claiming the same slot.
+    setPanel(platformId, { slot: targetLayout.slot });
+    setPanel(targetPlatform.id, { slot: draggedLayout.slot });
+  };
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-console">
@@ -217,17 +247,23 @@ function Dashboard() {
       >
         <div ref={canvasRef} className="relative min-w-0 flex-1 overflow-auto p-6">
           {ready &&
-            visible.map((p) => (
+            orderedVisible.map((p, i) => (
               <PlatformPanel
                 key={p.id}
                 platform={p}
-                layout={layout[p.id] ?? { x: 0, y: 0, minimised: false }}
+                gridIndex={i}
+                columns={columns}
+                cellWidth={cellWidth}
+                cellHeight={cellHeight}
+                gap={GAP}
+                totalVisible={orderedVisible.length}
                 bounds={{
-                  width: Math.max(bounds.width - 48, PANEL_WIDTH),
+                  width: Math.max(bounds.width - 48, cellWidth),
                   height: Math.max(bounds.height - 48, 400),
                 }}
                 zIndex={zFor(p.id)}
                 onFocus={() => focus(p.id)}
+                onReorder={(targetIndex) => handleReorder(p.id, targetIndex)}
                 onAddRow={() => setAddFor(p.id)}
                 onAddPayout={() => setPayoutFor(p.id)}
                 onOpenDetail={() => setDetailFor(p.id)}
@@ -265,6 +301,13 @@ function Dashboard() {
             ))
           )}
         </div>
+        <button
+          type="button"
+          onClick={resetLayout}
+          className="flex shrink-0 items-center gap-1.5 rounded border border-border px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+        >
+          <LayoutGrid className="size-3" /> Reset card layout
+        </button>
         <button
           type="button"
           onClick={restoreAll}
