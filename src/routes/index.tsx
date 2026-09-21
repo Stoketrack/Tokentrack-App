@@ -128,7 +128,7 @@ function Dashboard() {
   };
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-console">
+    <div className="flex h-dvh flex-col overflow-hidden bg-console">
       <nav className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border px-4">
         <div className="flex min-w-0 items-center gap-6">
           <div className="flex shrink-0 items-center gap-2">
@@ -281,7 +281,15 @@ function Dashboard() {
         )}
       </div>
 
-      <footer className="flex h-11 shrink-0 items-center gap-3 border-t border-border bg-console px-4">
+      <footer className="flex h-11 shrink-0 items-center gap-3 overflow-x-auto border-t border-border bg-console px-4">
+        <button
+          type="button"
+          onClick={resetLayout}
+          title="Reset all six cards to the normal dashboard grid — position only, no data is changed"
+          className="flex shrink-0 items-center gap-1.5 rounded border border-ring bg-secondary px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-foreground hover:opacity-90"
+        >
+          <LayoutGrid className="size-3" /> Snap back
+        </button>
         <span className="label-micro flex shrink-0 items-center gap-1.5">
           <LayoutGrid className="size-3.5" /> Minimised
         </span>
@@ -303,14 +311,8 @@ function Dashboard() {
         </div>
         <button
           type="button"
-          onClick={resetLayout}
-          className="flex shrink-0 items-center gap-1.5 rounded border border-border px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
-        >
-          <LayoutGrid className="size-3" /> Reset card layout
-        </button>
-        <button
-          type="button"
           onClick={restoreAll}
+          title="Un-minimise every card — does not change card position"
           className="flex shrink-0 items-center gap-1.5 rounded border border-border px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
         >
           <RotateCcw className="size-3" /> Restore all

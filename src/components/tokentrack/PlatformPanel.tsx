@@ -85,11 +85,18 @@ export function PlatformPanel({
     let thresholdMet = false;
     (e.target as Element).setPointerCapture?.(e.pointerId);
 
+    // The Y bound must be the full grid's row extent, not the visible
+    // canvas viewport — on mobile portrait the 6-card stack is far taller
+    // than what's on screen at once, and clamping to the viewport made it
+    // impossible to ever drag a card down into row 4/5/6 at all.
+    const maxRow = Math.max(0, Math.ceil(totalVisible / columns) - 1);
+    const maxY = maxRow * (cellHeight + gap);
+
     const clamp = (x: number, y: number) => ({
-      // Keep panels retrievable — never let them leave the console area,
-      // even mid-drag before they've snapped to a grid cell.
+      // X can safely clamp to the visible canvas width — columns are sized
+      // to always fit within it, so this never restricts a valid drop.
       x: Math.min(Math.max(x, 0), Math.max(bounds.width - cellWidth, 0)),
-      y: Math.min(Math.max(y, 0), Math.max(bounds.height - Math.min(cellHeight, 120), 0)),
+      y: Math.min(Math.max(y, 0), maxY),
     });
 
     const move = (ev: PointerEvent) => {
