@@ -36,8 +36,8 @@ export const DEFAULT_PLATFORMS: Platform[] = [
     displayName: "C4",
     status: "active",
     slot: 2,
-    inputMode: "tokens_and_usd",
-    tokenValueUsd: 0.1,
+    inputMode: "usd",
+    tokenValueUsd: 0.09,
     openingBalanceUsd: 0,
     openingDate: OPENING_DATE,
     accent: "var(--color-accent)",
@@ -50,9 +50,11 @@ export const DEFAULT_PLATFORMS: Platform[] = [
     displayName: "BC",
     status: "active",
     slot: 3,
-    inputMode: "tokens_and_usd",
-    // Observed effective rate: 1,324 tokens = $27.539
-    tokenValueUsd: 0.0208,
+    inputMode: "usd",
+    // BongaCams' own USD/earnings figure is authoritative and already
+    // reflects whatever adjustment the platform applies — this rate is
+    // only used to compute an approximate, informational token figure.
+    tokenValueUsd: 0.028,
     openingBalanceUsd: 0,
     openingDate: OPENING_DATE,
     accent: "var(--color-accent)",
@@ -65,7 +67,7 @@ export const DEFAULT_PLATFORMS: Platform[] = [
     displayName: "SC",
     status: "active",
     slot: 4,
-    inputMode: "tokens_and_usd",
+    inputMode: "tokens",
     tokenValueUsd: 0.05,
     openingBalanceUsd: 0,
     openingDate: OPENING_DATE,

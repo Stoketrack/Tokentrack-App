@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import {
   durationMinutes,
   fmtHours,
+  fmtNum,
   fmtUsd,
   normalizeHHmm,
   shiftDateUTC,
@@ -12,7 +13,7 @@ import {
   useTokenTrack,
 } from "@/lib/tokentrack/store";
 import { pushRecentValue, useRecentValues } from "@/lib/tokentrack/recentValues";
-import type { Platform } from "@/lib/tokentrack/types";
+import type { Platform, ResetCount } from "@/lib/tokentrack/types";
 
 interface Props {
   platform: Platform;
@@ -21,7 +22,7 @@ interface Props {
 }
 
 export function AddRowDialog({ platform, date, onClose }: Props) {
-  const { addRow, lastEntryFor } = useTokenTrack();
+  const { addRow, lastEntryFor, totalTokensFor, totalUsdFor } = useTokenTrack();
   const [rowDate, setRowDate] = useState(date);
   const [startTimeInput, setStartTimeInput] = useState("");
   const [endTimeInput, setEndTimeInput] = useState("");
@@ -31,6 +32,18 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   const [followersEnd, setFollowersEnd] = useState("");
   const [tokens, setTokens] = useState("");
   const [usd, setUsd] = useState("");
+  // Running-figure entry (StripChat/Cam4/BongaCams): the user types the
+  // CURRENT total the platform is showing right now; everything else is
+  // derived from it plus the previous running total. Kept entirely
+  // separate from `tokens`/`usd` above, which remain the raw day-figure
+  // inputs still used as-is for any platform on the older dual-entry mode.
+  const [runningInput, setRunningInput] = useState("");
+  // Forces the manual "amount earned tonight" fallback even when a normal
+  // diff would be possible — the user can reach for this deliberately, and
+  // it's forced automatically when there's no previous entry to diff
+  // against, or when the platform's counter looks like it was reset.
+  const [manualOverride, setManualOverride] = useState(false);
+  const [manualDeltaInput, setManualDeltaInput] = useState("");
   const [note, setNote] = useState("");
   const [listening, setListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
@@ -46,7 +59,7 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   const [siteRequiredReset, setSiteRequiredReset] = useState(false);
   const [obsProblem, setObsProblem] = useState(false);
   const [streamMasterProblem, setStreamMasterProblem] = useState(false);
-  const [resetCount, setResetCount] = useState<string | null>(null);
+  const [resetCount, setResetCount] = useState<ResetCount | null>(null);
 
   const recentStartTimes = useRecentValues("startTime", platform.id);
   const recentEndTimes = useRecentValues("endTime", platform.id);
@@ -126,11 +139,46 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   // Live preview of the values that will be derived from this row.
   const previewMinutes = durationMinutes(startTime || null, endTime || null);
   const previewTimeOfDay = timeOfDayFrom(startTime || null);
+
+  // --- Running-figure entry (StripChat/Cam4/BongaCams) ---
+  // "Previous total" is derived, not stored: it's simply the sum of every
+  // delta already recorded for this platform, which is mathematically the
+  // running total as of the most recently logged entry — whichever day
+  // that actually was, not necessarily yesterday or today.
+  const isTokensPrimary = platform.inputMode === "tokens";
+  const isUsdPrimary = platform.inputMode === "usd";
+  const isRunningMode = isTokensPrimary || isUsdPrimary;
+  const hasPreviousEntry = lastEntryFor(platform.id) !== null;
+  const previousTotal = isTokensPrimary ? totalTokensFor(platform.id) : totalUsdFor(platform.id);
+  const parsedRunning = num(runningInput);
+  const rawDiff = parsedRunning !== null ? parsedRunning - previousTotal : null;
+  // A lower running figure than last time almost always means the
+  // platform's own counter was reset (e.g. after a restart) — never
+  // silently save that as a negative night's earnings.
+  const looksLikeReset = hasPreviousEntry && rawDiff !== null && rawDiff < 0;
+  const needsManualEntry = !hasPreviousEntry || looksLikeReset || manualOverride;
+  const parsedManualDelta = num(manualDeltaInput);
+  const runningDelta = needsManualEntry ? parsedManualDelta : rawDiff;
+
+  // What actually gets saved into the existing tokens/usdActual fields —
+  // exactly the same fields every other entry (historical or dual-mode)
+  // already uses, so nothing downstream needs to know this input existed.
+  const finalTokens = isRunningMode
+    ? isTokensPrimary
+      ? runningDelta
+      : runningDelta !== null && platform.tokenValueUsd
+        ? Math.round((runningDelta / platform.tokenValueUsd) * 100) / 100
+        : null
+    : num(tokens);
+  const finalUsdActual = isRunningMode
+    ? isUsdPrimary
+      ? runningDelta
+      : null // tokens-primary (SC): let it derive via tokens × rate, same as any other entry
+    : num(usd);
+
   const previewUsd =
-    num(usd) ??
-    (num(tokens) !== null && platform.tokenValueUsd
-      ? (num(tokens) as number) * platform.tokenValueUsd
-      : null);
+    finalUsdActual ??
+    (finalTokens !== null && platform.tokenValueUsd ? finalTokens * platform.tokenValueUsd : null);
   const previewFollowerChange =
     num(followersStart) !== null && num(followersEnd) !== null
       ? (num(followersEnd) as number) - (num(followersStart) as number)
@@ -159,8 +207,8 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
       roomCount: num(roomCount),
       followersStart: num(followersStart),
       followersEnd: num(followersEnd),
-      tokens: num(tokens),
-      usdActual: num(usd),
+      tokens: finalTokens,
+      usdActual: finalUsdActual,
       followers: previewFollowerChange,
       minutes: previewMinutes,
       tokenValueUsdAtEntry: platform.tokenValueUsd,
@@ -363,33 +411,122 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
             </div>
 
             {/* Row 3 */}
-            <div>
-              <label className="label-micro" htmlFor="row-tokens">
-                Tokens earned today
-              </label>
-              <input
-                id="row-tokens"
-                inputMode="numeric"
-                value={tokens}
-                onChange={(e) => setTokens(e.target.value)}
-                placeholder="n/a"
-                className={`${compactField} text-token`}
-              />
-            </div>
+            {isRunningMode ? (
+              <div className="col-span-2 rounded-md border border-border bg-console/40 p-2.5">
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="label-micro" htmlFor="row-running">
+                    {isTokensPrimary ? "Current tokens" : "Current earnings"}
+                  </label>
+                  {hasPreviousEntry && (
+                    <span className="text-[10px] text-muted-foreground">
+                      Previous: {isTokensPrimary ? fmtNum(previousTotal) : fmtUsd(previousTotal)}
+                    </span>
+                  )}
+                </div>
 
-            <div>
-              <label className="label-micro" htmlFor="row-usd">
-                USD earned today
-              </label>
-              <input
-                id="row-usd"
-                inputMode="decimal"
-                value={usd}
-                onChange={(e) => setUsd(e.target.value)}
-                placeholder="n/a"
-                className={compactField}
-              />
-            </div>
+                {!needsManualEntry ? (
+                  <>
+                    <input
+                      id="row-running"
+                      inputMode={isTokensPrimary ? "numeric" : "decimal"}
+                      value={runningInput}
+                      onChange={(e) => setRunningInput(e.target.value)}
+                      placeholder={isTokensPrimary ? "e.g. 10600" : "e.g. 530.00"}
+                      className={`${compactField} text-token`}
+                    />
+                    {parsedRunning !== null && rawDiff !== null && (
+                      <div className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground">
+                        <p>
+                          {isTokensPrimary ? "Tokens earned tonight" : "USD earned tonight"}:{" "}
+                          <span className="numeric font-semibold text-token">
+                            {isTokensPrimary ? fmtNum(rawDiff) : fmtUsd(rawDiff)}
+                          </span>
+                        </p>
+                        {isTokensPrimary ? (
+                          <p>
+                            Current USD value:{" "}
+                            <span className="numeric font-semibold text-foreground">
+                              {fmtUsd(parsedRunning * (platform.tokenValueUsd ?? 0))}
+                            </span>
+                          </p>
+                        ) : (
+                          <p>
+                            Approx. tokens (informational):{" "}
+                            <span className="numeric font-semibold text-foreground">
+                              {platform.tokenValueUsd
+                                ? fmtNum(Math.round(rawDiff / platform.tokenValueUsd))
+                                : "—"}
+                            </span>
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setManualOverride(true)}
+                      className="mt-1.5 text-[10px] text-muted-foreground underline decoration-dotted hover:text-foreground"
+                    >
+                      Enter tonight's figure manually instead
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <p className="mb-1 text-[10px] text-token">
+                      {!hasPreviousEntry
+                        ? "No previous entry for this platform yet — enter tonight's actual figure directly."
+                        : "Lower than the last recorded total — the platform's counter was likely reset. Enter tonight's actual figure directly rather than a calculated one."}
+                    </p>
+                    <input
+                      id="row-manual-delta"
+                      inputMode={isTokensPrimary ? "numeric" : "decimal"}
+                      value={manualDeltaInput}
+                      onChange={(e) => setManualDeltaInput(e.target.value)}
+                      placeholder={isTokensPrimary ? "Tokens earned tonight" : "USD earned tonight"}
+                      className={`${compactField} text-token`}
+                    />
+                    {manualOverride && hasPreviousEntry && !looksLikeReset && (
+                      <button
+                        type="button"
+                        onClick={() => setManualOverride(false)}
+                        className="mt-1.5 text-[10px] text-muted-foreground underline decoration-dotted hover:text-foreground"
+                      >
+                        Back to automatic calculation
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label className="label-micro" htmlFor="row-tokens">
+                    Tokens earned today
+                  </label>
+                  <input
+                    id="row-tokens"
+                    inputMode="numeric"
+                    value={tokens}
+                    onChange={(e) => setTokens(e.target.value)}
+                    placeholder="n/a"
+                    className={`${compactField} text-token`}
+                  />
+                </div>
+
+                <div>
+                  <label className="label-micro" htmlFor="row-usd">
+                    USD earned today
+                  </label>
+                  <input
+                    id="row-usd"
+                    inputMode="decimal"
+                    value={usd}
+                    onChange={(e) => setUsd(e.target.value)}
+                    placeholder="n/a"
+                    className={compactField}
+                  />
+                </div>
+              </>
+            )}
 
             <div>
               <label className="label-micro" htmlFor="row-tod">
@@ -620,10 +757,10 @@ function ResetCountControl({
   value,
   onChange,
 }: {
-  value: string | null;
-  onChange: (next: string | null) => void;
+  value: ResetCount | null;
+  onChange: (next: ResetCount | null) => void;
 }) {
-  const options = ["0", "1", "2", "3", "4+"];
+  const options: ResetCount[] = ["0", "1", "2", "3", "4+"];
   return (
     <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Number of resets">
       {options.map((opt) => {
