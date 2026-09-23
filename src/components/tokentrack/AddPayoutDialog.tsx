@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X } from "lucide-react";
-import { fmtPhp, fmtUsd, useTokenTrack } from "@/lib/tokentrack/store";
+import { fmtNum, fmtPhp, fmtUsd, useTokenTrack } from "@/lib/tokentrack/store";
 import type { Platform } from "@/lib/tokentrack/types";
 
 interface Props {
@@ -22,10 +22,24 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
 
   const balance = currentTotalFor(platform.id);
   const tokenBalance = currentTokensFor(platform.id);
-  const parsed = Number(amount);
-  const parsedTokens = tokensAmount.trim() === "" ? null : Number(tokensAmount);
-  const valid = amount.trim() !== "" && Number.isFinite(parsed) && parsed > 0;
-  const tokensValid = parsedTokens === null || (Number.isFinite(parsedTokens) && parsedTokens >= 0);
+  const rate = platform.tokenValueUsd;
+  const rawAmount = amount.trim() === "" ? null : Number(amount);
+  const rawTokens = tokensAmount.trim() === "" ? null : Number(tokensAmount);
+  // Either field is sufficient on its own — whichever one is filled drives
+  // the other via the platform's existing configured rate. Never changes
+  // that rate; just applies it. If both are filled, both are taken as
+  // entered (not forced to reconcile) — someone may know the real figures
+  // differ slightly from the theoretical rate.
+  const derivedAmount =
+    rawAmount !== null
+      ? rawAmount
+      : rawTokens !== null && rate
+        ? Math.round(rawTokens * rate * 100) / 100
+        : null;
+  const derivedTokens =
+    rawTokens !== null ? rawTokens : rawAmount !== null && rate ? Math.round((rawAmount / rate) * 100) / 100 : null;
+  const valid = derivedAmount !== null && Number.isFinite(derivedAmount) && derivedAmount > 0;
+  const tokensValid = derivedTokens === null || (Number.isFinite(derivedTokens) && derivedTokens >= 0);
 
   const save = () => {
     if (!valid) {
@@ -40,8 +54,8 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
       platformId: platform.id,
       date: payoutDate,
       time: payoutTime || null,
-      amountUsd: parsed,
-      tokensAmount: parsedTokens,
+      amountUsd: derivedAmount as number,
+      tokensAmount: derivedTokens,
       note,
     });
     onClose();
@@ -112,14 +126,14 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
                   setAmount(e.target.value);
                   setError(null);
                 }}
-                placeholder="0.00"
+                placeholder={rawTokens !== null && rate ? fmtUsd(rawTokens * rate) : "0.00"}
                 className="numeric h-8 w-full rounded border border-border bg-console px-2 text-sm outline-none focus:border-ring"
               />
             </label>
           </div>
 
           <label className="block">
-            <span className="label-micro">Tokens (optional)</span>
+            <span className="label-micro">Tokens (optional if USD is entered)</span>
             <input
               type="number"
               min="0"
@@ -130,9 +144,24 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
                 setTokensAmount(e.target.value);
                 setError(null);
               }}
-              placeholder="Leave blank if unknown for this platform"
+              placeholder={rawAmount !== null && rate ? String(Math.round((rawAmount / rate) * 100) / 100) : "Leave blank to calculate from USD"}
               className={`numeric h-8 w-full rounded border bg-console px-2 text-sm outline-none focus:border-ring ${tokensValid ? "border-border" : "border-destructive"}`}
             />
+            {rate ? (
+              rawTokens === null && rawAmount !== null ? (
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  ≈ {fmtNum(derivedTokens ?? 0)} tokens, calculated at ${rate}/token
+                </p>
+              ) : rawAmount === null && rawTokens !== null ? (
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  ≈ {fmtUsd(derivedAmount ?? 0)}, calculated at ${rate}/token
+                </p>
+              ) : null
+            ) : (
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                No configured rate for this platform — tokens won't auto-calculate.
+              </p>
+            )}
           </label>
 
           <label className="block">
@@ -147,7 +176,7 @@ export function AddPayoutDialog({ platform, date, onClose }: Props) {
 
           <p className="text-[11px] text-muted-foreground">
             {valid
-              ? `${fmtUsd(parsed)} · ${fmtPhp(parsed * usdPhpRate)} → remaining ${fmtUsd(balance - parsed)}`
+              ? `${fmtUsd(derivedAmount as number)} · ${fmtPhp((derivedAmount as number) * usdPhpRate)} → remaining ${fmtUsd(balance - (derivedAmount as number))}`
               : "Payout reduces this platform's current total and is stored as a separate transaction."}
           </p>
           {error && <p className="text-[11px] text-token">{error}</p>}

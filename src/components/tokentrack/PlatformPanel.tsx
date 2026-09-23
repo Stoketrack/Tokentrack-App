@@ -58,13 +58,21 @@ export function PlatformPanel({
   onFocus,
   zIndex,
 }: Props) {
-  const { currentFollowersFor, currentTokensFor, usdPhpRate, setPanel } = useTokenTrack();
+  const { currentFollowersFor, currentTokensFor, currentTotalFor, usdPhpRate, setPanel } =
+    useTokenTrack();
   const followers = currentFollowersFor(platform.id);
   // Unpaid token balance: tokens earned minus tokens already covered by
-  // recorded payouts. currentTokensFor already implements this correctly
-  // (see store.tsx) — reused as-is, not recalculated here.
+  // recorded payouts. Kept as the informational secondary "Tokens earned"
+  // figure on the card — NOT used for the primary dollar balance, since a
+  // payout's token equivalent is often left blank (it's optional, and most
+  // payouts are recorded by their real dollar amount).
   const unpaidTokens = currentTokensFor(platform.id);
-  const unpaidUsd = unpaidTokens * (platform.tokenValueUsd ?? 0);
+  // The primary balance is the actual USD ledger — every dollar recorded
+  // from entries, plus the platform's opening balance, minus every real
+  // payout dollar amount. This is what a $51.45 payout against a $51.45
+  // balance correctly zeroes out, regardless of whether that payout's
+  // token equivalent was ever filled in.
+  const unpaidUsd = currentTotalFor(platform.id);
 
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState({ x: 0, y: 0 });
