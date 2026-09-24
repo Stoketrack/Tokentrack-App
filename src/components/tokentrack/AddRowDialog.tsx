@@ -15,6 +15,9 @@ import {
 import { pushRecentValue, useRecentValues } from "@/lib/tokentrack/recentValues";
 import type { Platform, ResetCount } from "@/lib/tokentrack/types";
 
+/** Which of the four linked earnings fields the user actually typed into last. */
+type EarningsField = "totalUsd" | "usdEarned" | "totalTokens" | "tokensEarned";
+
 interface Props {
   platform: Platform;
   date: string;
@@ -30,20 +33,19 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   const [followersStart, setFollowersStart] = useState<string>("");
   const [followersStartLocked, setFollowersStartLocked] = useState(false);
   const [followersEnd, setFollowersEnd] = useState("");
-  const [tokens, setTokens] = useState("");
-  const [usd, setUsd] = useState("");
-  // Running-figure entry (StripChat/Cam4/BongaCams): the user types the
-  // CURRENT total the platform is showing right now; everything else is
-  // derived from it plus the previous running total. Kept entirely
-  // separate from `tokens`/`usd` above, which remain the raw day-figure
-  // inputs still used as-is for any platform on the older dual-entry mode.
-  const [runningInput, setRunningInput] = useState("");
-  // Forces the manual "amount earned tonight" fallback even when a normal
-  // diff would be possible — the user can reach for this deliberately, and
-  // it's forced automatically when there's no previous entry to diff
-  // against, or when the platform's counter looks like it was reset.
-  const [manualOverride, setManualOverride] = useState(false);
-  const [manualDeltaInput, setManualDeltaInput] = useState("");
+  // Earnings entry: four fields covering both units (USD/tokens) in both
+  // shapes (platform running total / tonight's delta). Whichever one is
+  // actually typed into is the source of truth for this row; the other
+  // three are derived from it plus the platform's historical running
+  // totals and update live, so all four stay visibly consistent —
+  // deliberately "dissected" like this so it's easy to see the
+  // calculation is doing what it should, rather than trusting one hidden
+  // number.
+  const [totalUsdInput, setTotalUsdInput] = useState("");
+  const [usdEarnedInput, setUsdEarnedInput] = useState("");
+  const [totalTokensInput, setTotalTokensInput] = useState("");
+  const [tokensEarnedInput, setTokensEarnedInput] = useState("");
+  const [lastEditedField, setLastEditedField] = useState<EarningsField | null>(null);
   const [note, setNote] = useState("");
   const [listening, setListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
@@ -140,45 +142,103 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   const previewMinutes = durationMinutes(startTime || null, endTime || null);
   const previewTimeOfDay = timeOfDayFrom(startTime || null);
 
-  // --- Running-figure entry (StripChat/Cam4/BongaCams) ---
   // "Previous total" is derived, not stored: it's simply the sum of every
   // delta already recorded for this platform, which is mathematically the
   // running total as of the most recently logged entry — whichever day
   // that actually was, not necessarily yesterday or today.
-  const isTokensPrimary = platform.inputMode === "tokens";
-  const isUsdPrimary = platform.inputMode === "usd";
-  const isRunningMode = isTokensPrimary || isUsdPrimary;
-  const hasPreviousEntry = lastEntryFor(platform.id) !== null;
-  const previousTotal = isTokensPrimary ? totalTokensFor(platform.id) : totalUsdFor(platform.id);
-  const parsedRunning = num(runningInput);
-  const rawDiff = parsedRunning !== null ? parsedRunning - previousTotal : null;
-  // A lower running figure than last time almost always means the
-  // platform's own counter was reset (e.g. after a restart) — never
-  // silently save that as a negative night's earnings.
-  const looksLikeReset = hasPreviousEntry && rawDiff !== null && rawDiff < 0;
-  const needsManualEntry = !hasPreviousEntry || looksLikeReset || manualOverride;
-  const parsedManualDelta = num(manualDeltaInput);
-  const runningDelta = needsManualEntry ? parsedManualDelta : rawDiff;
+  const previousTotalUsd = totalUsdFor(platform.id);
+  const previousTotalTokens = totalTokensFor(platform.id);
+  const rate = platform.tokenValueUsd ?? null;
+  const fmt2 = (n: number) => (Number.isFinite(n) ? String(Math.round(n * 100) / 100) : "");
+  const fmtWhole = (n: number) => (Number.isFinite(n) ? String(Math.round(n)) : "");
+
+  // Whichever of the four fields was just typed into drives the other
+  // three — total figures and tonight's figures always differ by exactly
+  // the previous running total, and USD/tokens convert via the platform's
+  // rate when one is known.
+  useEffect(() => {
+    if (!lastEditedField) return;
+    if (lastEditedField === "totalUsd") {
+      const totalUsd = num(totalUsdInput);
+      if (totalUsd === null) return;
+      const usdEarned = totalUsd - previousTotalUsd;
+      setUsdEarnedInput(fmt2(usdEarned));
+      if (rate) {
+        const tokensEarned = usdEarned / rate;
+        setTokensEarnedInput(fmtWhole(tokensEarned));
+        setTotalTokensInput(fmtWhole(previousTotalTokens + tokensEarned));
+      } else {
+        setTokensEarnedInput("");
+        setTotalTokensInput("");
+      }
+    } else if (lastEditedField === "usdEarned") {
+      const usdEarned = num(usdEarnedInput);
+      if (usdEarned === null) return;
+      setTotalUsdInput(fmt2(previousTotalUsd + usdEarned));
+      if (rate) {
+        const tokensEarned = usdEarned / rate;
+        setTokensEarnedInput(fmtWhole(tokensEarned));
+        setTotalTokensInput(fmtWhole(previousTotalTokens + tokensEarned));
+      } else {
+        setTokensEarnedInput("");
+        setTotalTokensInput("");
+      }
+    } else if (lastEditedField === "totalTokens") {
+      const totalTokens = num(totalTokensInput);
+      if (totalTokens === null) return;
+      const tokensEarned = totalTokens - previousTotalTokens;
+      setTokensEarnedInput(fmtWhole(tokensEarned));
+      if (rate) {
+        const usdEarned = tokensEarned * rate;
+        setUsdEarnedInput(fmt2(usdEarned));
+        setTotalUsdInput(fmt2(previousTotalUsd + usdEarned));
+      } else {
+        setUsdEarnedInput("");
+        setTotalUsdInput("");
+      }
+    } else if (lastEditedField === "tokensEarned") {
+      const tokensEarned = num(tokensEarnedInput);
+      if (tokensEarned === null) return;
+      setTotalTokensInput(fmtWhole(previousTotalTokens + tokensEarned));
+      if (rate) {
+        const usdEarned = tokensEarned * rate;
+        setUsdEarnedInput(fmt2(usdEarned));
+        setTotalUsdInput(fmt2(previousTotalUsd + usdEarned));
+      } else {
+        setUsdEarnedInput("");
+        setTotalUsdInput("");
+      }
+    }
+  }, [
+    lastEditedField,
+    totalUsdInput,
+    usdEarnedInput,
+    totalTokensInput,
+    tokensEarnedInput,
+    previousTotalUsd,
+    previousTotalTokens,
+    rate,
+  ]);
 
   // What actually gets saved into the existing tokens/usdActual fields —
-  // exactly the same fields every other entry (historical or dual-mode)
-  // already uses, so nothing downstream needs to know this input existed.
-  const finalTokens = isRunningMode
-    ? isTokensPrimary
-      ? runningDelta
-      : runningDelta !== null && platform.tokenValueUsd
-        ? Math.round((runningDelta / platform.tokenValueUsd) * 100) / 100
-        : null
-    : num(tokens);
-  const finalUsdActual = isRunningMode
-    ? isUsdPrimary
-      ? runningDelta
-      : null // tokens-primary (SC): let it derive via tokens × rate, same as any other entry
-    : num(usd);
+  // exactly the same fields every other entry already uses, so nothing
+  // downstream needs to know these four inputs existed. Tokens are always
+  // recorded when known; USD is only recorded as the row's authoritative
+  // figure when a USD-side field drove the edit — otherwise it's left null
+  // so the existing tokens × rate fallback marks it "calculated", same as
+  // it always has.
+  const finalTokens = num(tokensEarnedInput);
+  const finalUsdActual =
+    lastEditedField === "totalTokens" || lastEditedField === "tokensEarned"
+      ? null
+      : num(usdEarnedInput);
 
-  const previewUsd =
-    finalUsdActual ??
-    (finalTokens !== null && platform.tokenValueUsd ? finalTokens * platform.tokenValueUsd : null);
+  const usdEarnedNum = num(usdEarnedInput);
+  const tokensEarnedNum = num(tokensEarnedInput);
+  const usdEarnedNegative = usdEarnedNum !== null && usdEarnedNum < 0;
+  const tokensEarnedNegative = tokensEarnedNum !== null && tokensEarnedNum < 0;
+
+  const previewUsd = finalUsdActual ?? (finalTokens !== null && rate ? finalTokens * rate : null);
   const previewFollowerChange =
     num(followersStart) !== null && num(followersEnd) !== null
       ? (num(followersEnd) as number) - (num(followersStart) as number)
@@ -410,167 +470,155 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
               )}
             </div>
 
-            {/* Row 3 */}
-            {isRunningMode ? (
-              <div className="col-span-2 rounded-md border border-border bg-console/40 p-2.5">
+            {/* Row 3 — earnings, all four related figures shown together
+                (rather than one hidden running total) so it's easy to see
+                the calculation is doing what it should. Typing into any one
+                field derives the other three from it plus the platform's
+                historical running totals. */}
+            <div className="col-span-3 grid grid-cols-2 gap-2 rounded-md border border-border bg-console/40 p-2.5">
+              <div>
                 <div className="mb-1 flex items-center justify-between">
-                  <label className="label-micro" htmlFor="row-running">
-                    {isTokensPrimary ? "Current tokens" : "Current earnings"}
+                  <label className="label-micro" htmlFor="row-total-usd">
+                    Platform total $
                   </label>
-                  {hasPreviousEntry && (
-                    <span className="text-[10px] text-muted-foreground">
-                      Previous: {isTokensPrimary ? fmtNum(previousTotal) : fmtUsd(previousTotal)}
-                    </span>
-                  )}
+                  <span className="text-[10px] text-muted-foreground">
+                    Previous: {fmtUsd(previousTotalUsd)}
+                  </span>
                 </div>
-
-                {!needsManualEntry ? (
-                  <>
-                    <input
-                      id="row-running"
-                      inputMode={isTokensPrimary ? "numeric" : "decimal"}
-                      value={runningInput}
-                      onChange={(e) => setRunningInput(e.target.value)}
-                      placeholder={isTokensPrimary ? "e.g. 10600" : "e.g. 530.00"}
-                      className={`${compactField} text-token`}
-                    />
-                    {parsedRunning !== null && rawDiff !== null && (
-                      <div className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground">
-                        <p>
-                          {isTokensPrimary ? "Tokens earned tonight" : "USD earned tonight"}:{" "}
-                          <span className="numeric font-semibold text-token">
-                            {isTokensPrimary ? fmtNum(rawDiff) : fmtUsd(rawDiff)}
-                          </span>
-                        </p>
-                        {isTokensPrimary ? (
-                          <p>
-                            Current USD value:{" "}
-                            <span className="numeric font-semibold text-foreground">
-                              {fmtUsd(parsedRunning * (platform.tokenValueUsd ?? 0))}
-                            </span>
-                          </p>
-                        ) : (
-                          <p>
-                            Approx. tokens (informational):{" "}
-                            <span className="numeric font-semibold text-foreground">
-                              {platform.tokenValueUsd
-                                ? fmtNum(Math.round(rawDiff / platform.tokenValueUsd))
-                                : "—"}
-                            </span>
-                          </p>
-                        )}
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setManualOverride(true)}
-                      className="mt-1.5 text-[10px] text-muted-foreground underline decoration-dotted hover:text-foreground"
-                    >
-                      Enter tonight's figure manually instead
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <p className="mb-1 text-[10px] text-token">
-                      {!hasPreviousEntry
-                        ? "No previous entry for this platform yet — enter tonight's actual figure directly."
-                        : "Lower than the last recorded total — the platform's counter was likely reset. Enter tonight's actual figure directly rather than a calculated one."}
-                    </p>
-                    <input
-                      id="row-manual-delta"
-                      inputMode={isTokensPrimary ? "numeric" : "decimal"}
-                      value={manualDeltaInput}
-                      onChange={(e) => setManualDeltaInput(e.target.value)}
-                      placeholder={isTokensPrimary ? "Tokens earned tonight" : "USD earned tonight"}
-                      className={`${compactField} text-token`}
-                    />
-                    {manualOverride && hasPreviousEntry && !looksLikeReset && (
-                      <button
-                        type="button"
-                        onClick={() => setManualOverride(false)}
-                        className="mt-1.5 text-[10px] text-muted-foreground underline decoration-dotted hover:text-foreground"
-                      >
-                        Back to automatic calculation
-                      </button>
-                    )}
-                  </>
+                <input
+                  id="row-total-usd"
+                  inputMode="decimal"
+                  value={totalUsdInput}
+                  onChange={(e) => {
+                    setLastEditedField("totalUsd");
+                    setTotalUsdInput(e.target.value);
+                  }}
+                  placeholder="e.g. 530.00"
+                  className={`${compactField} text-token`}
+                />
+                {lastEditedField === "totalUsd" && usdEarnedNegative && (
+                  <p className="mt-0.5 text-[9px] text-token">
+                    Lower than the previous total — likely a counter reset. Type tonight's figure
+                    into "$ earned tonight" instead.
+                  </p>
                 )}
               </div>
-            ) : (
-              <>
-                <div>
-                  <label className="label-micro" htmlFor="row-tokens">
-                    Tokens earned today
-                  </label>
-                  <input
-                    id="row-tokens"
-                    inputMode="numeric"
-                    value={tokens}
-                    onChange={(e) => setTokens(e.target.value)}
-                    placeholder="n/a"
-                    className={`${compactField} text-token`}
-                  />
-                </div>
 
-                <div>
-                  <label className="label-micro" htmlFor="row-usd">
-                    USD earned today
-                  </label>
-                  <input
-                    id="row-usd"
-                    inputMode="decimal"
-                    value={usd}
-                    onChange={(e) => setUsd(e.target.value)}
-                    placeholder="n/a"
-                    className={compactField}
-                  />
-                </div>
-              </>
-            )}
+              <div>
+                <label className="label-micro" htmlFor="row-usd-earned">
+                  $ earned tonight
+                </label>
+                <input
+                  id="row-usd-earned"
+                  inputMode="decimal"
+                  value={usdEarnedInput}
+                  onChange={(e) => {
+                    setLastEditedField("usdEarned");
+                    setUsdEarnedInput(e.target.value);
+                  }}
+                  placeholder="n/a"
+                  className={compactField}
+                />
+              </div>
 
-            <div>
-              <label className="label-micro" htmlFor="row-tod">
-                Time of Day
-              </label>
-              <input
-                id="row-tod"
-                readOnly
-                tabIndex={-1}
-                value={previewTimeOfDay ?? "—"}
-                aria-label="Time of day, derived from start time"
-                className={`${compactField} text-muted-foreground`}
-              />
+              <div>
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="label-micro" htmlFor="row-total-tokens">
+                    Platform total tokens
+                  </label>
+                  <span className="text-[10px] text-muted-foreground">
+                    Previous: {fmtNum(previousTotalTokens)}
+                  </span>
+                </div>
+                <input
+                  id="row-total-tokens"
+                  inputMode="numeric"
+                  value={totalTokensInput}
+                  onChange={(e) => {
+                    setLastEditedField("totalTokens");
+                    setTotalTokensInput(e.target.value);
+                  }}
+                  placeholder="e.g. 10600"
+                  className={`${compactField} text-token`}
+                />
+                {lastEditedField === "totalTokens" && tokensEarnedNegative && (
+                  <p className="mt-0.5 text-[9px] text-token">
+                    Lower than the previous total — likely a counter reset. Type tonight's figure
+                    into "Tokens earned tonight" instead.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="label-micro" htmlFor="row-tokens-earned">
+                  Tokens earned tonight
+                </label>
+                <input
+                  id="row-tokens-earned"
+                  inputMode="numeric"
+                  value={tokensEarnedInput}
+                  onChange={(e) => {
+                    setLastEditedField("tokensEarned");
+                    setTokensEarnedInput(e.target.value);
+                  }}
+                  placeholder="n/a"
+                  className={`${compactField} text-token`}
+                />
+              </div>
+
+              {!rate && (
+                <p className="col-span-2 text-[9px] text-muted-foreground">
+                  No token rate set for this platform — dollar and token figures won't convert into
+                  each other automatically.
+                </p>
+              )}
             </div>
 
-            {/* Notes spans full width */}
-            <div className="col-span-3">
-              <div className="flex items-center justify-between">
-                <label className="label-micro" htmlFor="row-note">
-                  Notes
-                </label>
-                {voiceSupported && (
-                  <button
-                    type="button"
-                    onClick={toggleVoice}
-                    aria-label={listening ? "Stop dictation" : "Dictate notes"}
-                    className={`rounded border border-border px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                      listening
-                        ? "border-token/40 text-token"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {listening ? <MicOff className="size-3" /> : <Mic className="size-3" />}
-                  </button>
-                )}
+            {/* Notes (left half) and Time of Day (right half) */}
+            <div className="col-span-3 grid grid-cols-2 gap-2">
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="label-micro" htmlFor="row-note">
+                    Notes
+                  </label>
+                  {voiceSupported && (
+                    <button
+                      type="button"
+                      onClick={toggleVoice}
+                      aria-label={listening ? "Stop dictation" : "Dictate notes"}
+                      className={`rounded border border-border px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                        listening
+                          ? "border-token/40 text-token"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {listening ? <MicOff className="size-3" /> : <Mic className="size-3" />}
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  id="row-note"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  rows={1}
+                  placeholder="Notes"
+                  className={textAreaField}
+                />
               </div>
-              <textarea
-                id="row-note"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                rows={1}
-                placeholder="Notes"
-                className={textAreaField}
-              />
+
+              <div>
+                <label className="label-micro" htmlFor="row-tod">
+                  Time of Day
+                </label>
+                <input
+                  id="row-tod"
+                  readOnly
+                  tabIndex={-1}
+                  value={previewTimeOfDay ?? "—"}
+                  aria-label="Time of day, derived from start time"
+                  className={`${compactField} text-muted-foreground`}
+                />
+              </div>
             </div>
 
             {/* Session / Connection — compact, optional, sits directly above Save Entry */}
