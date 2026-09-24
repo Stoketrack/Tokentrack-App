@@ -166,7 +166,9 @@ function sanitizeLayout(
         ? (entry as { slot: number }).slot
         : null;
     const minimised =
-      entry && typeof entry === "object" && typeof (entry as { minimised?: unknown }).minimised === "boolean"
+      entry &&
+      typeof entry === "object" &&
+      typeof (entry as { minimised?: unknown }).minimised === "boolean"
         ? (entry as { minimised: boolean }).minimised
         : false;
     if (slot !== null && !used.has(slot)) {
@@ -410,8 +412,7 @@ function entryPatchToDb(patch: Partial<EntryRow>): Record<string, unknown> {
   if (patch.connectionDropped !== undefined) db.connection_dropped = patch.connectionDropped;
   if (patch.siteRequiredReset !== undefined) db.site_required_reset = patch.siteRequiredReset;
   if (patch.obsProblem !== undefined) db.obs_problem = patch.obsProblem;
-  if (patch.streamMasterProblem !== undefined)
-    db.stream_master_problem = patch.streamMasterProblem;
+  if (patch.streamMasterProblem !== undefined) db.stream_master_problem = patch.streamMasterProblem;
   if (patch.resetCount !== undefined) db.reset_count = patch.resetCount;
   return db;
 }
@@ -1103,50 +1104,67 @@ export function TokenTrackProvider({ children }: { children: ReactNode }) {
       totalUsdFor,
       currentTokensFor,
       payoutsFor,
-      addPayout: ({ platformId, date, time, amountUsd, tokensAmount, note }) =>
-        setState((s) => {
-          const platform = s.platforms.find((p) => p.id === platformId);
-          if (!platform || !Number.isFinite(amountUsd) || amountUsd <= 0) return s;
-          const payout: Payout = {
-            id: `payout-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            platformId,
-            date,
-            time: time ?? null,
-            amountUsd,
-            tokensAmount: tokensAmount ?? null,
-            destination: platform.payoutDestination ?? "Unassigned",
-            usdPhpRateAtEntry: fx.rate,
-            note: note ?? "",
-            createdAt: new Date().toISOString(),
-          };
-          void supabase
-            .from("tokentrack_payouts")
-            .insert(payoutToDb(payout))
-            .then(({ error }) => {
-              if (error) console.error("Failed to persist payout:", error);
-            });
-          return { ...s, payouts: [...s.payouts, payout] };
-        }),
-      addRow: (row) =>
-        setState((s) => {
-          const now = new Date().toISOString();
-          const full: EntryRow = {
-            origin: "manual",
-            verified: false,
-            ...row,
-            importKey: rowImportKey(row),
-            id: `row-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            createdAt: now,
-            updatedAt: now,
-          };
-          void supabase
-            .from("tokentrack_entries")
-            .insert(entryRowToDb(full))
-            .then(({ error }) => {
-              if (error) console.error("Failed to persist entry row:", error);
-            });
-          return { ...s, rows: [...s.rows, full] };
-        }),
+      addPayout: ({ platformId, date, time, amountUsd, tokensAmount, note }) => {
+        const platform = state.platforms.find((p) => p.id === platformId);
+        if (!platform || !Number.isFinite(amountUsd) || amountUsd <= 0) return;
+        const payout: Payout = {
+          id: `payout-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          platformId,
+          date,
+          time: time ?? null,
+          amountUsd,
+          tokensAmount: tokensAmount ?? null,
+          destination: platform.payoutDestination ?? "Unassigned",
+          usdPhpRateAtEntry: fx.rate,
+          note: note ?? "",
+          createdAt: new Date().toISOString(),
+        };
+        // Same fix as addRow: only reflected on the dashboard once Supabase
+        // confirms the write, so a failed payout save can't zero out (or
+        // partially zero out) a balance that was never actually recorded.
+        void supabase
+          .from("tokentrack_payouts")
+          .insert(payoutToDb(payout))
+          .then(({ error }) => {
+            if (error) {
+              console.error(
+                "Failed to persist payout — not applied to the dashboard so it can't show an unsaved balance change:",
+                error,
+              );
+              return;
+            }
+            setState((s) => ({ ...s, payouts: [...s.payouts, payout] }));
+          });
+      },
+      addRow: (row) => {
+        const now = new Date().toISOString();
+        const full: EntryRow = {
+          origin: "manual",
+          verified: false,
+          ...row,
+          importKey: rowImportKey(row),
+          id: `row-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          createdAt: now,
+          updatedAt: now,
+        };
+        // Commit to local state only once the write is confirmed. Updating
+        // optimistically and only logging on failure let the dashboard show
+        // a figure that was never actually saved — correct until reload,
+        // wrong after, with no indication anything had failed.
+        void supabase
+          .from("tokentrack_entries")
+          .insert(entryRowToDb(full))
+          .then(({ error }) => {
+            if (error) {
+              console.error(
+                "Failed to persist entry row — not applied to the dashboard so it can't show an unsaved figure:",
+                error,
+              );
+              return;
+            }
+            setState((s) => ({ ...s, rows: [...s.rows, full] }));
+          });
+      },
       importRows: importRowsImpl,
       importPayouts: importPayoutsImpl,
       createBackup: (): TokenTrackBackup => ({
@@ -1160,39 +1178,61 @@ export function TokenTrackProvider({ children }: { children: ReactNode }) {
       restoreBackup: restoreBackupImpl,
       updateRow: (id, patch) => {
         const now = new Date().toISOString();
-        setState((s) => ({
-          ...s,
-          rows: s.rows.map((r) => (r.id === id ? { ...r, ...patch, updatedAt: now } : r)),
-        }));
+        // Confirm-then-commit, same as addRow above: an edit that fails to
+        // save (e.g. in Reconciliation) now simply leaves the dashboard
+        // showing the last good figure, instead of a corrected one that
+        // silently reverts on the next reload.
         void supabase
           .from("tokentrack_entries")
           .update({ ...entryPatchToDb(patch), updated_at: now })
           .eq("id", id)
           .then(({ error }) => {
-            if (error) console.error("Failed to persist row update:", error);
+            if (error) {
+              console.error(
+                "Failed to persist row update — dashboard left showing the last saved figure:",
+                error,
+              );
+              return;
+            }
+            setState((s) => ({
+              ...s,
+              rows: s.rows.map((r) => (r.id === id ? { ...r, ...patch, updatedAt: now } : r)),
+            }));
           });
       },
       deleteRow: (id) => {
-        setState((s) => ({ ...s, rows: s.rows.filter((r) => r.id !== id) }));
         void supabase
           .from("tokentrack_entries")
           .delete()
           .eq("id", id)
           .then(({ error }) => {
-            if (error) console.error("Failed to delete row:", error);
+            if (error) {
+              console.error(
+                "Failed to delete row — left in place since the delete didn't actually save:",
+                error,
+              );
+              return;
+            }
+            setState((s) => ({ ...s, rows: s.rows.filter((r) => r.id !== id) }));
           });
       },
       updatePlatform: (id, patch) => {
-        setState((s) => ({
-          ...s,
-          platforms: s.platforms.map((p) => (p.id === id ? { ...p, ...patch } : p)),
-        }));
         void supabase
           .from("tokentrack_platforms")
           .update(platformPatchToDb(patch))
           .eq("id", id)
           .then(({ error }) => {
-            if (error) console.error("Failed to persist platform update:", error);
+            if (error) {
+              console.error(
+                "Failed to persist platform update — left showing the last saved settings:",
+                error,
+              );
+              return;
+            }
+            setState((s) => ({
+              ...s,
+              platforms: s.platforms.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+            }));
           });
       },
       setPanel: (platformId, patch) =>
@@ -1206,8 +1246,7 @@ export function TokenTrackProvider({ children }: { children: ReactNode }) {
             },
           },
         })),
-      resetLayout: () =>
-        setState((s) => ({ ...s, layout: defaultLayout(s.platforms) })),
+      resetLayout: () => setState((s) => ({ ...s, layout: defaultLayout(s.platforms) })),
       restoreAll: () =>
         setState((s) => ({
           ...s,
