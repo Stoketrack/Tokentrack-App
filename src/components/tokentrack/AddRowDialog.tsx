@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Mic, MicOff, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, GripVertical, Mic, MicOff, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   durationMinutes,
@@ -15,8 +15,8 @@ import {
 import { pushRecentValue, useRecentValues } from "@/lib/tokentrack/recentValues";
 import type { Platform, ResetCount } from "@/lib/tokentrack/types";
 
-/** Which of the four linked earnings fields the user actually typed into last. */
-type EarningsField = "totalUsd" | "usdEarned" | "totalTokens" | "tokensEarned";
+/** Which of the two editable "current platform total" fields was typed into last. */
+type EarningsField = "currentUsd" | "currentTokens";
 
 interface Props {
   platform: Platform;
@@ -25,7 +25,7 @@ interface Props {
 }
 
 export function AddRowDialog({ platform, date, onClose }: Props) {
-  const { addRow, lastEntryFor, totalTokensFor, totalUsdFor } = useTokenTrack();
+  const { addRow, lastEntryFor, currentTotalFor, currentTokensFor } = useTokenTrack();
   const [rowDate, setRowDate] = useState(date);
   const [startTimeInput, setStartTimeInput] = useState("");
   const [endTimeInput, setEndTimeInput] = useState("");
@@ -33,18 +33,16 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   const [followersStart, setFollowersStart] = useState<string>("");
   const [followersStartLocked, setFollowersStartLocked] = useState(false);
   const [followersEnd, setFollowersEnd] = useState("");
-  // Earnings entry: four fields covering both units (USD/tokens) in both
-  // shapes (platform running total / tonight's delta). Whichever one is
-  // actually typed into is the source of truth for this row; the other
-  // three are derived from it plus the platform's historical running
-  // totals and update live, so all four stay visibly consistent —
-  // deliberately "dissected" like this so it's easy to see the
-  // calculation is doing what it should, rather than trusting one hidden
-  // number.
-  const [totalUsdInput, setTotalUsdInput] = useState("");
-  const [usdEarnedInput, setUsdEarnedInput] = useState("");
-  const [totalTokensInput, setTotalTokensInput] = useState("");
-  const [tokensEarnedInput, setTokensEarnedInput] = useState("");
+  // Earnings entry: "platform total" here means the platform's current
+  // running UNPAID/cash-out balance since the last payout — the same
+  // figure currentTotalFor()/currentTokensFor() already compute for the
+  // dashboard card itself (opening balance + everything earned − every
+  // payout), never a lifetime total. "Previous" is that value read right
+  // now, before this row exists; "Current" is what you type in from the
+  // platform's site; "earned tonight" is simply the difference, shown for
+  // both units and kept mutually consistent via the platform's rate.
+  const [currentUsdInput, setCurrentUsdInput] = useState("");
+  const [currentTokensInput, setCurrentTokensInput] = useState("");
   const [lastEditedField, setLastEditedField] = useState<EarningsField | null>(null);
   const [note, setNote] = useState("");
   const [listening, setListening] = useState(false);
@@ -66,6 +64,51 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   const recentStartTimes = useRecentValues("startTime", platform.id);
   const recentEndTimes = useRecentValues("endTime", platform.id);
   const recentRoomCounts = useRecentValues("roomCount", platform.id);
+
+  // Floating, draggable box position — same free-pixel drag mechanics as
+  // the platform cards themselves, so this behaves like another card on
+  // the canvas rather than a screen-blocking modal. Starts centred once
+  // its real size is known, then only moves when the user drags it.
+  const boxRef = useRef<HTMLFormElement | null>(null);
+  const [boxPos, setBoxPos] = useState<{ x: number; y: number } | null>(null);
+  const [boxDragging, setBoxDragging] = useState(false);
+
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setBoxPos({
+      x: Math.max(8, (window.innerWidth - rect.width) / 2),
+      y: Math.max(8, (window.innerHeight - rect.height) / 2),
+    });
+  }, []);
+
+  const startBoxDrag = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    const el = boxRef.current;
+    if (!el || !boxPos) return;
+    const start = { px: e.clientX, py: e.clientY };
+    const origin = { x: boxPos.x, y: boxPos.y };
+    const rect = el.getBoundingClientRect();
+    const maxX = Math.max(0, window.innerWidth - rect.width);
+    const maxY = Math.max(0, window.innerHeight - rect.height);
+    setBoxDragging(true);
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+
+    const move = (ev: PointerEvent) => {
+      setBoxPos({
+        x: Math.min(Math.max(0, origin.x + (ev.clientX - start.px)), maxX),
+        y: Math.min(Math.max(0, origin.y + (ev.clientY - start.py)), maxY),
+      });
+    };
+    const up = () => {
+      setBoxDragging(false);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
 
   // Validate and normalize the 4-digit input strings to the stored no-colon HHmm form.
   const startTime = useMemo(() => normalizeHHmm(startTimeInput), [startTimeInput]);
@@ -142,101 +185,60 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   const previewMinutes = durationMinutes(startTime || null, endTime || null);
   const previewTimeOfDay = timeOfDayFrom(startTime || null);
 
-  // "Previous total" is derived, not stored: it's simply the sum of every
-  // delta already recorded for this platform, which is mathematically the
-  // running total as of the most recently logged entry — whichever day
-  // that actually was, not necessarily yesterday or today.
-  const previousTotalUsd = totalUsdFor(platform.id);
-  const previousTotalTokens = totalTokensFor(platform.id);
+  // "Previous platform total" is the running unpaid/cash-out balance since
+  // the last payout — i.e. exactly what the dashboard card itself shows
+  // right now, before this row exists. Reusing currentTotalFor/
+  // currentTokensFor (the same functions the card reads) guarantees this
+  // box always matches the card: opening balance + everything earned so
+  // far − every payout recorded, never a lifetime/all-time figure.
+  const previousTotalUsd = currentTotalFor(platform.id);
+  const previousTotalTokens = currentTokensFor(platform.id);
   const rate = platform.tokenValueUsd ?? null;
   const fmt2 = (n: number) => (Number.isFinite(n) ? String(Math.round(n * 100) / 100) : "");
   const fmtWhole = (n: number) => (Number.isFinite(n) ? String(Math.round(n)) : "");
 
-  // Whichever of the four fields was just typed into drives the other
-  // three — total figures and tonight's figures always differ by exactly
-  // the previous running total, and USD/tokens convert via the platform's
-  // rate when one is known.
+  // Only the two "Current platform total" boxes are ever typed into.
+  // Whichever one was just edited drives the other (via the platform's
+  // rate) — "earned tonight" in both units is then simply current minus
+  // previous, computed below, never independently editable.
   useEffect(() => {
-    if (!lastEditedField) return;
-    if (lastEditedField === "totalUsd") {
-      const totalUsd = num(totalUsdInput);
-      if (totalUsd === null) return;
-      const usdEarned = totalUsd - previousTotalUsd;
-      setUsdEarnedInput(fmt2(usdEarned));
-      if (rate) {
-        const tokensEarned = usdEarned / rate;
-        setTokensEarnedInput(fmtWhole(tokensEarned));
-        setTotalTokensInput(fmtWhole(previousTotalTokens + tokensEarned));
-      } else {
-        setTokensEarnedInput("");
-        setTotalTokensInput("");
-      }
-    } else if (lastEditedField === "usdEarned") {
-      const usdEarned = num(usdEarnedInput);
-      if (usdEarned === null) return;
-      setTotalUsdInput(fmt2(previousTotalUsd + usdEarned));
-      if (rate) {
-        const tokensEarned = usdEarned / rate;
-        setTokensEarnedInput(fmtWhole(tokensEarned));
-        setTotalTokensInput(fmtWhole(previousTotalTokens + tokensEarned));
-      } else {
-        setTokensEarnedInput("");
-        setTotalTokensInput("");
-      }
-    } else if (lastEditedField === "totalTokens") {
-      const totalTokens = num(totalTokensInput);
-      if (totalTokens === null) return;
-      const tokensEarned = totalTokens - previousTotalTokens;
-      setTokensEarnedInput(fmtWhole(tokensEarned));
-      if (rate) {
-        const usdEarned = tokensEarned * rate;
-        setUsdEarnedInput(fmt2(usdEarned));
-        setTotalUsdInput(fmt2(previousTotalUsd + usdEarned));
-      } else {
-        setUsdEarnedInput("");
-        setTotalUsdInput("");
-      }
-    } else if (lastEditedField === "tokensEarned") {
-      const tokensEarned = num(tokensEarnedInput);
-      if (tokensEarned === null) return;
-      setTotalTokensInput(fmtWhole(previousTotalTokens + tokensEarned));
-      if (rate) {
-        const usdEarned = tokensEarned * rate;
-        setUsdEarnedInput(fmt2(usdEarned));
-        setTotalUsdInput(fmt2(previousTotalUsd + usdEarned));
-      } else {
-        setUsdEarnedInput("");
-        setTotalUsdInput("");
-      }
+    if (!lastEditedField || !rate) return;
+    if (lastEditedField === "currentUsd") {
+      const currentUsd = num(currentUsdInput);
+      if (currentUsd === null) return;
+      const dollarsEarned = currentUsd - previousTotalUsd;
+      setCurrentTokensInput(fmtWhole(previousTotalTokens + dollarsEarned / rate));
+    } else {
+      const currentTokens = num(currentTokensInput);
+      if (currentTokens === null) return;
+      const tokensEarned = currentTokens - previousTotalTokens;
+      setCurrentUsdInput(fmt2(previousTotalUsd + tokensEarned * rate));
     }
   }, [
     lastEditedField,
-    totalUsdInput,
-    usdEarnedInput,
-    totalTokensInput,
-    tokensEarnedInput,
+    currentUsdInput,
+    currentTokensInput,
     previousTotalUsd,
     previousTotalTokens,
     rate,
   ]);
 
-  // What actually gets saved into the existing tokens/usdActual fields —
-  // exactly the same fields every other entry already uses, so nothing
-  // downstream needs to know these four inputs existed. Tokens are always
-  // recorded when known; USD is only recorded as the row's authoritative
-  // figure when a USD-side field drove the edit — otherwise it's left null
-  // so the existing tokens × rate fallback marks it "calculated", same as
-  // it always has.
-  const finalTokens = num(tokensEarnedInput);
-  const finalUsdActual =
-    lastEditedField === "totalTokens" || lastEditedField === "tokensEarned"
-      ? null
-      : num(usdEarnedInput);
+  const currentUsdNum = num(currentUsdInput);
+  const currentTokensNum = num(currentTokensInput);
+  const dollarsEarnedTonight = currentUsdNum !== null ? currentUsdNum - previousTotalUsd : null;
+  const tokensEarnedTonight =
+    currentTokensNum !== null ? currentTokensNum - previousTotalTokens : null;
+  const dollarsEarnedNegative = dollarsEarnedTonight !== null && dollarsEarnedTonight < 0;
+  const tokensEarnedNegative = tokensEarnedTonight !== null && tokensEarnedTonight < 0;
 
-  const usdEarnedNum = num(usdEarnedInput);
-  const tokensEarnedNum = num(tokensEarnedInput);
-  const usdEarnedNegative = usdEarnedNum !== null && usdEarnedNum < 0;
-  const tokensEarnedNegative = tokensEarnedNum !== null && tokensEarnedNum < 0;
+  // What actually gets saved into the existing tokens/usdActual fields —
+  // exactly the same fields every other entry already uses. Tokens are
+  // recorded whenever known; USD is only recorded as the row's
+  // authoritative figure when the dollar box drove the edit — otherwise
+  // it's left null so the existing tokens × rate fallback marks it
+  // "calculated", same as it always has.
+  const finalTokens = tokensEarnedTonight;
+  const finalUsdActual = lastEditedField === "currentTokens" ? null : dollarsEarnedTonight;
 
   const previewUsd = finalUsdActual ?? (finalTokens !== null && rate ? finalTokens * rate : null);
   const previewFollowerChange =
@@ -300,251 +302,296 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
     "w-full rounded-md border border-input bg-console px-2 py-1 text-xs outline-none focus:border-ring h-8 min-h-[32px] resize-y font-sans";
 
   return (
-    <div className="fixed inset-0 z-100 grid place-items-center overflow-hidden bg-console/80 p-4 backdrop-blur-sm">
-      <form
-        onSubmit={submit}
-        className="max-h-[92vh] w-full max-w-[980px] overflow-y-auto rounded-xl border border-border bg-panel shadow-panel-lift"
+    <form
+      ref={boxRef}
+      onSubmit={submit}
+      style={
+        boxPos
+          ? { left: boxPos.x, top: boxPos.y, zIndex: 500 }
+          : {
+              left: "50%",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
+              visibility: "hidden",
+              zIndex: 500,
+            }
+      }
+      className={cn(
+        "fixed max-h-[92vh] w-[min(980px,calc(100vw-16px))] overflow-y-auto rounded-xl border border-border bg-panel shadow-panel",
+        boxDragging ? "shadow-panel-lift" : "hover:shadow-panel-lift",
+      )}
+    >
+      <header
+        onPointerDown={startBoxDrag}
+        className={cn(
+          "sticky top-0 z-10 flex items-center justify-between gap-2 rounded-t-xl border-b border-border bg-panel-header px-3 py-2 touch-none",
+          boxDragging ? "cursor-grabbing" : "cursor-grab",
+        )}
       >
-        <header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-panel-header px-3 py-2">
-          <div>
+        <div className="flex min-w-0 items-center gap-2">
+          <GripVertical className="size-3.5 shrink-0 text-muted-foreground/60" aria-hidden />
+          <div className="min-w-0">
             <p className="label-micro">New entry for</p>
-            <h2 className="text-sm font-semibold">{platform.name}</h2>
+            <h2 className="truncate text-sm font-semibold">{platform.name}</h2>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Cancel"
-              className="grid size-7 place-items-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
-            >
-              <X className="size-4" />
-            </button>
-          </div>
-        </header>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            onPointerDown={(e) => e.stopPropagation()}
+            aria-label="Cancel"
+            className="grid size-7 place-items-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      </header>
 
-        <div className="p-3">
-          <div className="grid grid-cols-3 gap-2">
-            {/* Row 1 */}
-            <div>
-              <label className="label-micro" htmlFor="row-date">
-                Date
-              </label>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setRowDate((d) => shiftDateUTC(d, -1))}
-                  aria-label="Previous day"
-                  className="grid size-8 shrink-0 place-items-center rounded-md border border-input bg-console text-muted-foreground hover:text-foreground"
-                >
-                  <ChevronLeft className="size-3.5" />
-                </button>
-                <input
-                  id="row-date"
-                  type="date"
-                  value={rowDate}
-                  onChange={(e) => setRowDate(e.target.value)}
-                  className={compactField}
-                />
-                <button
-                  type="button"
-                  onClick={() => setRowDate((d) => shiftDateUTC(d, 1))}
-                  aria-label="Next day"
-                  className="grid size-8 shrink-0 place-items-center rounded-md border border-input bg-console text-muted-foreground hover:text-foreground"
-                >
-                  <ChevronRight className="size-3.5" />
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <label className="label-micro" htmlFor="row-start">
-                Start time (24h)
-              </label>
+      <div className="p-3">
+        <div className="grid grid-cols-3 gap-2">
+          {/* Row 1 */}
+          <div>
+            <label className="label-micro" htmlFor="row-date">
+              Date
+            </label>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setRowDate((d) => shiftDateUTC(d, -1))}
+                aria-label="Previous day"
+                className="grid size-8 shrink-0 place-items-center rounded-md border border-input bg-console text-muted-foreground hover:text-foreground"
+              >
+                <ChevronLeft className="size-3.5" />
+              </button>
               <input
-                id="row-start"
-                type="text"
-                inputMode="numeric"
-                maxLength={4}
-                value={startTimeInput}
-                onChange={handleStartTimeChange}
-                placeholder="0900"
-                className={`${compactField} ${!startTimeValid ? "border-error" : ""}`}
-                aria-label="Start time as 4-digit 24-hour HHMM, e.g. 0900 or 2200"
-              />
-              {startTime && <p className="mt-0.5 text-[9px] text-muted-foreground">{startTime}</p>}
-              {recentStartTimes.values.length > 0 && (
-                <RecentChipsRow
-                  values={recentStartTimes.values}
-                  formatLabel={(v) => normalizeHHmm(v) || v}
-                  onPick={(v) => setStartTimeInput(v)}
-                />
-              )}
-            </div>
-
-            <div>
-              <label className="label-micro" htmlFor="row-end">
-                End time (24h)
-              </label>
-              <input
-                id="row-end"
-                type="text"
-                inputMode="numeric"
-                maxLength={4}
-                value={endTimeInput}
-                onChange={handleEndTimeChange}
-                placeholder="1300"
-                className={`${compactField} ${!endTimeValid ? "border-error" : ""}`}
-                aria-label="End time as 4-digit 24-hour HHMM, e.g. 1300 or 2200"
-              />
-              {endTime && <p className="mt-0.5 text-[9px] text-muted-foreground">{endTime}</p>}
-              {recentEndTimes.values.length > 0 && (
-                <RecentChipsRow
-                  values={recentEndTimes.values}
-                  formatLabel={(v) => normalizeHHmm(v) || v}
-                  onPick={(v) => setEndTimeInput(v)}
-                />
-              )}
-            </div>
-
-            {/* Row 2 */}
-            <div>
-              <label className="label-micro" htmlFor="row-fol-start">
-                Followers at start
-              </label>
-              <input
-                id="row-fol-start"
-                inputMode="numeric"
-                value={followersStart}
-                onChange={(e) => {
-                  setFollowersStart(e.target.value);
-                  setFollowersStartLocked(false);
-                }}
-                placeholder={followersStartLocked ? "" : "enter manually"}
-                className={`${compactField} ${followersStartLocked ? "text-muted-foreground" : ""}`}
-                aria-label={
-                  followersStartLocked
-                    ? "Auto-filled from previous entry's ending followers"
-                    : "Followers at start — no previous entry exists"
-                }
-              />
-              {followersStartLocked && (
-                <p className="mt-0.5 text-[9px] text-muted-foreground">From previous entry</p>
-              )}
-            </div>
-
-            <div>
-              <label className="label-micro" htmlFor="row-fol-end">
-                Followers at end
-              </label>
-              <input
-                id="row-fol-end"
-                inputMode="numeric"
-                value={followersEnd}
-                onChange={(e) => setFollowersEnd(e.target.value)}
-                placeholder="0"
+                id="row-date"
+                type="date"
+                value={rowDate}
+                onChange={(e) => setRowDate(e.target.value)}
                 className={compactField}
               />
+              <button
+                type="button"
+                onClick={() => setRowDate((d) => shiftDateUTC(d, 1))}
+                aria-label="Next day"
+                className="grid size-8 shrink-0 place-items-center rounded-md border border-input bg-console text-muted-foreground hover:text-foreground"
+              >
+                <ChevronRight className="size-3.5" />
+              </button>
             </div>
+          </div>
 
-            <div>
-              <label className="label-micro" htmlFor="row-rooms">
-                Room count
-              </label>
-              <input
-                id="row-rooms"
-                inputMode="numeric"
-                value={roomCount}
-                onChange={(e) => setRoomCount(e.target.value)}
-                placeholder="0"
-                className={compactField}
+          <div>
+            <label className="label-micro" htmlFor="row-start">
+              Start time (24h)
+            </label>
+            <input
+              id="row-start"
+              type="text"
+              inputMode="numeric"
+              maxLength={4}
+              value={startTimeInput}
+              onChange={handleStartTimeChange}
+              placeholder="0900"
+              className={`${compactField} ${!startTimeValid ? "border-error" : ""}`}
+              aria-label="Start time as 4-digit 24-hour HHMM, e.g. 0900 or 2200"
+            />
+            {startTime && <p className="mt-0.5 text-[9px] text-muted-foreground">{startTime}</p>}
+            {recentStartTimes.values.length > 0 && (
+              <RecentChipsRow
+                values={recentStartTimes.values}
+                formatLabel={(v) => normalizeHHmm(v) || v}
+                onPick={(v) => setStartTimeInput(v)}
               />
-              {recentRoomCounts.values.length > 0 && (
-                <RecentChipsRow values={recentRoomCounts.values} onPick={(v) => setRoomCount(v)} />
-              )}
-            </div>
+            )}
+          </div>
 
-            {/* Row 3 — earnings, all four related figures shown together
-                (rather than one hidden running total) so it's easy to see
-                the calculation is doing what it should. Typing into any one
-                field derives the other three from it plus the platform's
-                historical running totals. */}
-            <div className="col-span-3 grid grid-cols-2 gap-2 rounded-md border border-border bg-console/40 p-2.5">
+          <div>
+            <label className="label-micro" htmlFor="row-end">
+              End time (24h)
+            </label>
+            <input
+              id="row-end"
+              type="text"
+              inputMode="numeric"
+              maxLength={4}
+              value={endTimeInput}
+              onChange={handleEndTimeChange}
+              placeholder="1300"
+              className={`${compactField} ${!endTimeValid ? "border-error" : ""}`}
+              aria-label="End time as 4-digit 24-hour HHMM, e.g. 1300 or 2200"
+            />
+            {endTime && <p className="mt-0.5 text-[9px] text-muted-foreground">{endTime}</p>}
+            {recentEndTimes.values.length > 0 && (
+              <RecentChipsRow
+                values={recentEndTimes.values}
+                formatLabel={(v) => normalizeHHmm(v) || v}
+                onPick={(v) => setEndTimeInput(v)}
+              />
+            )}
+          </div>
+
+          {/* Row 2 */}
+          <div>
+            <label className="label-micro" htmlFor="row-fol-start">
+              Followers at start
+            </label>
+            <input
+              id="row-fol-start"
+              inputMode="numeric"
+              value={followersStart}
+              onChange={(e) => {
+                setFollowersStart(e.target.value);
+                setFollowersStartLocked(false);
+              }}
+              placeholder={followersStartLocked ? "" : "enter manually"}
+              className={`${compactField} ${followersStartLocked ? "text-muted-foreground" : ""}`}
+              aria-label={
+                followersStartLocked
+                  ? "Auto-filled from previous entry's ending followers"
+                  : "Followers at start — no previous entry exists"
+              }
+            />
+            {followersStartLocked && (
+              <p className="mt-0.5 text-[9px] text-muted-foreground">From previous entry</p>
+            )}
+          </div>
+
+          <div>
+            <label className="label-micro" htmlFor="row-fol-end">
+              Followers at end
+            </label>
+            <input
+              id="row-fol-end"
+              inputMode="numeric"
+              value={followersEnd}
+              onChange={(e) => setFollowersEnd(e.target.value)}
+              placeholder="0"
+              className={compactField}
+            />
+          </div>
+
+          <div>
+            <label className="label-micro" htmlFor="row-rooms">
+              Room count
+            </label>
+            <input
+              id="row-rooms"
+              inputMode="numeric"
+              value={roomCount}
+              onChange={(e) => setRoomCount(e.target.value)}
+              placeholder="0"
+              className={compactField}
+            />
+            {recentRoomCounts.values.length > 0 && (
+              <RecentChipsRow values={recentRoomCounts.values} onPick={(v) => setRoomCount(v)} />
+            )}
+          </div>
+
+          {/* Row 3 — six boxes: previous running balance (since the last
+                payout — the same figure the dashboard card shows),
+                current running balance (what you type in from the
+                platform's site), and tonight's earned difference, for both
+                dollars and tokens. Only the two "Current" boxes are
+                editable; typing into either one derives the other three
+                via the platform's rate. */}
+          <div className="col-span-3 space-y-2 rounded-md border border-border bg-console/40 p-2.5">
+            <div className="grid grid-cols-3 gap-2">
               <div>
-                <div className="mb-1 flex items-center justify-between">
-                  <label className="label-micro" htmlFor="row-total-usd">
-                    Platform total $
-                  </label>
-                  <span className="text-[10px] text-muted-foreground">
-                    Previous: {fmtUsd(previousTotalUsd)}
-                  </span>
-                </div>
+                <label className="label-micro" htmlFor="row-prev-usd">
+                  Previous platform total $
+                </label>
                 <input
-                  id="row-total-usd"
+                  id="row-prev-usd"
+                  readOnly
+                  tabIndex={-1}
+                  value={fmtUsd(previousTotalUsd)}
+                  aria-label="Running unpaid balance in dollars, since the last payout, before this session"
+                  className={`${compactField} text-muted-foreground`}
+                />
+              </div>
+
+              <div>
+                <label className="label-micro" htmlFor="row-current-usd">
+                  Current platform total $
+                </label>
+                <input
+                  id="row-current-usd"
                   inputMode="decimal"
-                  value={totalUsdInput}
+                  value={currentUsdInput}
                   onChange={(e) => {
-                    setLastEditedField("totalUsd");
-                    setTotalUsdInput(e.target.value);
+                    setLastEditedField("currentUsd");
+                    setCurrentUsdInput(e.target.value);
                   }}
-                  placeholder="e.g. 530.00"
+                  placeholder="e.g. 65.00"
                   className={`${compactField} text-token`}
                 />
-                {lastEditedField === "totalUsd" && usdEarnedNegative && (
+                {lastEditedField === "currentUsd" && dollarsEarnedNegative && (
                   <p className="mt-0.5 text-[9px] text-token">
-                    Lower than the previous total — likely a counter reset. Type tonight's figure
-                    into "$ earned tonight" instead.
+                    Lower than the previous total — likely a payout not yet logged, or a counter
+                    reset.
                   </p>
                 )}
               </div>
 
               <div>
                 <label className="label-micro" htmlFor="row-usd-earned">
-                  $ earned tonight
+                  Dollars earned tonight
                 </label>
                 <input
                   id="row-usd-earned"
-                  inputMode="decimal"
-                  value={usdEarnedInput}
-                  onChange={(e) => {
-                    setLastEditedField("usdEarned");
-                    setUsdEarnedInput(e.target.value);
-                  }}
-                  placeholder="n/a"
-                  className={compactField}
+                  readOnly
+                  tabIndex={-1}
+                  value={dollarsEarnedTonight !== null ? fmtUsd(dollarsEarnedTonight) : "—"}
+                  aria-label="Current platform total minus previous platform total"
+                  className={`${compactField} text-muted-foreground`}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="label-micro" htmlFor="row-prev-tokens">
+                  Previous platform tokens
+                </label>
+                <input
+                  id="row-prev-tokens"
+                  readOnly
+                  tabIndex={-1}
+                  value={fmtNum(previousTotalTokens)}
+                  aria-label="Running unpaid token balance, since the last payout, before this session"
+                  className={`${compactField} text-muted-foreground`}
                 />
               </div>
 
               <div>
-                <div className="mb-1 flex items-center justify-between">
-                  <label className="label-micro" htmlFor="row-total-tokens">
-                    Platform total tokens
-                  </label>
-                  <span className="text-[10px] text-muted-foreground">
-                    Previous: {fmtNum(previousTotalTokens)}
-                  </span>
-                </div>
+                <label className="label-micro" htmlFor="row-current-tokens">
+                  Current platform tokens
+                </label>
                 <input
-                  id="row-total-tokens"
+                  id="row-current-tokens"
                   inputMode="numeric"
-                  value={totalTokensInput}
+                  value={currentTokensInput}
                   onChange={(e) => {
-                    setLastEditedField("totalTokens");
-                    setTotalTokensInput(e.target.value);
+                    setLastEditedField("currentTokens");
+                    setCurrentTokensInput(e.target.value);
                   }}
-                  placeholder="e.g. 10600"
+                  placeholder="e.g. 1300"
                   className={`${compactField} text-token`}
                 />
-                {lastEditedField === "totalTokens" && tokensEarnedNegative && (
+                {lastEditedField === "currentTokens" && tokensEarnedNegative && (
                   <p className="mt-0.5 text-[9px] text-token">
-                    Lower than the previous total — likely a counter reset. Type tonight's figure
-                    into "Tokens earned tonight" instead.
+                    Lower than the previous total — likely a payout not yet logged, or a counter
+                    reset.
                   </p>
                 )}
               </div>
@@ -555,173 +602,171 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
                 </label>
                 <input
                   id="row-tokens-earned"
-                  inputMode="numeric"
-                  value={tokensEarnedInput}
-                  onChange={(e) => {
-                    setLastEditedField("tokensEarned");
-                    setTokensEarnedInput(e.target.value);
-                  }}
-                  placeholder="n/a"
-                  className={`${compactField} text-token`}
-                />
-              </div>
-
-              {!rate && (
-                <p className="col-span-2 text-[9px] text-muted-foreground">
-                  No token rate set for this platform — dollar and token figures won't convert into
-                  each other automatically.
-                </p>
-              )}
-            </div>
-
-            {/* Notes (left half) and Time of Day (right half) */}
-            <div className="col-span-3 grid grid-cols-2 gap-2">
-              <div>
-                <div className="flex items-center justify-between">
-                  <label className="label-micro" htmlFor="row-note">
-                    Notes
-                  </label>
-                  {voiceSupported && (
-                    <button
-                      type="button"
-                      onClick={toggleVoice}
-                      aria-label={listening ? "Stop dictation" : "Dictate notes"}
-                      className={`rounded border border-border px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                        listening
-                          ? "border-token/40 text-token"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {listening ? <MicOff className="size-3" /> : <Mic className="size-3" />}
-                    </button>
-                  )}
-                </div>
-                <textarea
-                  id="row-note"
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  rows={1}
-                  placeholder="Notes"
-                  className={textAreaField}
-                />
-              </div>
-
-              <div>
-                <label className="label-micro" htmlFor="row-tod">
-                  Time of Day
-                </label>
-                <input
-                  id="row-tod"
                   readOnly
                   tabIndex={-1}
-                  value={previewTimeOfDay ?? "—"}
-                  aria-label="Time of day, derived from start time"
+                  value={tokensEarnedTonight !== null ? fmtNum(tokensEarnedTonight) : "—"}
+                  aria-label="Current platform tokens minus previous platform tokens"
                   className={`${compactField} text-muted-foreground`}
                 />
               </div>
             </div>
 
-            {/* Session / Connection — compact, optional, sits directly above Save Entry */}
-            <div className="col-span-3 rounded-md border border-border bg-console/40 p-2.5">
-              <p className="label-micro mb-1.5">Session / Connection</p>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">
-                    VPN
-                  </p>
-                  <div className="flex flex-col gap-1">
-                    <ToggleChip
-                      label="VPN ON at start"
-                      checked={vpnOnAtStart}
-                      onChange={setVpnOnAtStart}
-                    />
-                    <ToggleChip
-                      label="VPN turned OFF during session"
-                      checked={vpnTurnedOffDuring}
-                      onChange={setVpnTurnedOffDuring}
-                    />
-                  </div>
-                </div>
+            {!rate && (
+              <p className="text-[9px] text-muted-foreground">
+                No token rate set for this platform — dollar and token figures won't convert into
+                each other automatically.
+              </p>
+            )}
+          </div>
 
-                <div>
-                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">
-                    Connection
-                  </p>
-                  <div className="flex flex-col gap-1">
-                    <ToggleChip
-                      label="Connection dropped"
-                      checked={connectionDropped}
-                      onChange={setConnectionDropped}
-                    />
-                    <ToggleChip
-                      label="Site required reset"
-                      checked={siteRequiredReset}
-                      onChange={setSiteRequiredReset}
-                    />
-                    <ToggleChip
-                      label="OBS problem / glitch"
-                      checked={obsProblem}
-                      onChange={setObsProblem}
-                    />
-                    <ToggleChip
-                      label="Stream Master problem / glitch"
-                      checked={streamMasterProblem}
-                      onChange={setStreamMasterProblem}
-                    />
-                  </div>
-                </div>
+          {/* Notes (left half) and Time of Day (right half) */}
+          <div className="col-span-3 grid grid-cols-2 gap-2">
+            <div>
+              <div className="flex items-center justify-between">
+                <label className="label-micro" htmlFor="row-note">
+                  Notes
+                </label>
+                {voiceSupported && (
+                  <button
+                    type="button"
+                    onClick={toggleVoice}
+                    aria-label={listening ? "Stop dictation" : "Dictate notes"}
+                    className={`rounded border border-border px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                      listening
+                        ? "border-token/40 text-token"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {listening ? <MicOff className="size-3" /> : <Mic className="size-3" />}
+                  </button>
+                )}
               </div>
+              <textarea
+                id="row-note"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={1}
+                placeholder="Notes"
+                className={textAreaField}
+              />
+            </div>
 
-              <div className="mt-2.5">
+            <div>
+              <label className="label-micro" htmlFor="row-tod">
+                Time of Day
+              </label>
+              <input
+                id="row-tod"
+                readOnly
+                tabIndex={-1}
+                value={previewTimeOfDay ?? "—"}
+                aria-label="Time of day, derived from start time"
+                className={`${compactField} text-muted-foreground`}
+              />
+            </div>
+          </div>
+
+          {/* Session / Connection — compact, optional, sits directly above Save Entry */}
+          <div className="col-span-3 rounded-md border border-border bg-console/40 p-2.5">
+            <p className="label-micro mb-1.5">Session / Connection</p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
                 <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">
-                  Number of resets
+                  VPN
                 </p>
-                <ResetCountControl value={resetCount} onChange={setResetCount} />
+                <div className="flex flex-col gap-1">
+                  <ToggleChip
+                    label="VPN ON at start"
+                    checked={vpnOnAtStart}
+                    onChange={setVpnOnAtStart}
+                  />
+                  <ToggleChip
+                    label="VPN turned OFF during session"
+                    checked={vpnTurnedOffDuring}
+                    onChange={setVpnTurnedOffDuring}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">
+                  Connection
+                </p>
+                <div className="flex flex-col gap-1">
+                  <ToggleChip
+                    label="Connection dropped"
+                    checked={connectionDropped}
+                    onChange={setConnectionDropped}
+                  />
+                  <ToggleChip
+                    label="Site required reset"
+                    checked={siteRequiredReset}
+                    onChange={setSiteRequiredReset}
+                  />
+                  <ToggleChip
+                    label="OBS problem / glitch"
+                    checked={obsProblem}
+                    onChange={setObsProblem}
+                  />
+                  <ToggleChip
+                    label="Stream Master problem / glitch"
+                    checked={streamMasterProblem}
+                    onChange={setStreamMasterProblem}
+                  />
+                </div>
               </div>
             </div>
 
-            {/* Row 4 — save */}
-            <div className="col-span-3 flex justify-end">
-              <button
-                type="submit"
-                className="h-8 rounded-md bg-primary px-6 text-xs font-bold uppercase tracking-wider text-primary-foreground hover:opacity-90"
-              >
-                Save Entry
-              </button>
+            <div className="mt-2.5">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">
+                Number of resets
+              </p>
+              <ResetCountControl value={resetCount} onChange={setResetCount} />
             </div>
           </div>
 
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border bg-console/60 px-3 py-1.5 text-xs">
-            <div className="flex items-center gap-1.5">
-              <span className="label-micro">Duration</span>
-              <span className="numeric">
-                {previewMinutes === null ? "—" : fmtHours(previewMinutes)}
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="label-micro">Follower change</span>
-              <span className="numeric">
-                {previewFollowerChange === null
-                  ? "—"
-                  : `${previewFollowerChange >= 0 ? "+" : ""}${previewFollowerChange}`}
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="label-micro">Per hour</span>
-              <span className="numeric">
-                {previewPerHour === null ? "—" : fmtUsd(previewPerHour)}
-              </span>
-            </div>
+          {/* Row 4 — save */}
+          <div className="col-span-3 flex justify-end">
+            <button
+              type="submit"
+              className="h-8 rounded-md bg-primary px-6 text-xs font-bold uppercase tracking-wider text-primary-foreground hover:opacity-90"
+            >
+              Save Entry
+            </button>
           </div>
-
-          <p className="mt-2 rounded-md border border-border bg-console/60 px-3 py-1.5 text-[11px] text-muted-foreground">
-            Enter only what the platform reported for this day/session. Tokens and USD are daily
-            figures, not running totals. If a previous entry exists, its ending followers are used
-            as the starting value automatically.
-          </p>
         </div>
-      </form>
-    </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border bg-console/60 px-3 py-1.5 text-xs">
+          <div className="flex items-center gap-1.5">
+            <span className="label-micro">Duration</span>
+            <span className="numeric">
+              {previewMinutes === null ? "—" : fmtHours(previewMinutes)}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="label-micro">Follower change</span>
+            <span className="numeric">
+              {previewFollowerChange === null
+                ? "—"
+                : `${previewFollowerChange >= 0 ? "+" : ""}${previewFollowerChange}`}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="label-micro">Per hour</span>
+            <span className="numeric">
+              {previewPerHour === null ? "—" : fmtUsd(previewPerHour)}
+            </span>
+          </div>
+        </div>
+
+        <p className="mt-2 rounded-md border border-border bg-console/60 px-3 py-1.5 text-[11px] text-muted-foreground">
+          "Platform total" is the running unpaid balance since the last payout — the same figure the
+          dashboard card shows — not a lifetime total. Enter the platform's current total in either
+          dollars or tokens and tonight's earned figures fill in automatically. If a previous entry
+          exists, its ending followers are used as the starting value automatically.
+        </p>
+      </div>
+    </form>
   );
 }
 

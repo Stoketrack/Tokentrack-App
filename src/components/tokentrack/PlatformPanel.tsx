@@ -158,7 +158,7 @@ export function PlatformPanel({
         "absolute rounded-xl border border-border bg-panel shadow-panel",
         dragging
           ? "shadow-panel-lift"
-          : "transition-[left,top] duration-200 ease-out hover:shadow-panel-lift",
+          : "transition-[left,top,box-shadow] duration-200 ease-out hover:shadow-panel-lift",
       )}
     >
       <header className="flex items-center justify-between gap-2 rounded-t-xl border-b border-border bg-panel-header px-3 py-2.5">
