@@ -838,6 +838,25 @@ export function TokenTrackProvider({ children }: { children: ReactNode }) {
 
   const currentTokensFor = useCallback(
     (platformId: string) => {
+      const platform = state.platforms.find((p) => p.id === platformId);
+      // USD-authoritative platforms (e.g. BongaCams, Cam4) report a dollar
+      // balance; their token figure is only ever an approximation at the
+      // configured rate. Summing stored token figures on those platforms
+      // builds a second, independent ledger (rows saved without tokens,
+      // an opening balance with no tokens, payouts converted at a different
+      // rate…) that drifts away from the dollar balance — showing up as a
+      // phantom negative token balance. So the token balance is derived
+      // from the same dollar balance the card shows, at the same rate.
+      if (platform?.inputMode === "usd" && platform.tokenValueUsd) {
+        const earnedUsd = state.rows
+          .filter((r) => r.platformId === platformId)
+          .reduce((sum, r) => sum + deriveRow(r).usdValue, 0);
+        const paidUsd = state.payouts
+          .filter((p) => p.platformId === platformId)
+          .reduce((sum, p) => sum + p.amountUsd, 0);
+        const balanceUsd = (platform.openingBalanceUsd ?? 0) + earnedUsd - paidUsd;
+        return Math.round(balanceUsd / platform.tokenValueUsd);
+      }
       const earned = state.rows
         .filter((r) => r.platformId === platformId)
         .reduce((sum, r) => sum + (r.tokens ?? 0), 0);
@@ -846,7 +865,7 @@ export function TokenTrackProvider({ children }: { children: ReactNode }) {
         .reduce((sum, p) => sum + (p.tokensAmount ?? 0), 0);
       return earned - paidTokens;
     },
-    [state.rows, state.payouts],
+    [state.rows, state.payouts, state.platforms],
   );
 
   const currentFollowersFor = useCallback(

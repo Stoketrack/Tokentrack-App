@@ -88,10 +88,11 @@ export function PlatformSettings() {
                 />
               </Labelled>
               <Labelled label="Payout information">
-                <input
-                  className={field}
+                <textarea
+                  className="min-h-8 w-full resize-y rounded-md border border-input bg-console px-2 py-1.5 text-xs leading-snug outline-none focus:border-ring"
+                  rows={2}
                   value={p.payoutInfo ?? ""}
-                  placeholder="Account ref, schedule, minimum"
+                  placeholder="Account ref, schedule, minimum, timelines…"
                   onChange={(e) => updatePlatform(p.id, { payoutInfo: e.target.value })}
                 />
               </Labelled>

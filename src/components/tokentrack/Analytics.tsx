@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { ArrowDown, ArrowUp, Minus, TrendingUp } from "lucide-react";
 import {
@@ -51,6 +51,22 @@ const METRIC_KEYS: MetricKey[] = [
 
 /** Distinct chart-line colors — platform.accent is currently the same value for every platform, so lines are told apart here instead. */
 const LINE_COLORS = ["#f59e0b", "#38bdf8", "#a78bfa", "#34d399", "#fb7185", "#facc15"];
+
+const SELECTED_PLATFORMS_KEY = "tokentrack.analytics.selectedPlatforms.v1";
+
+function loadSelectedPlatforms(): string[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(SELECTED_PLATFORMS_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.every((x) => typeof x === "string")
+      ? (parsed as string[])
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 function shiftDate(date: string, days: number) {
   const d = new Date(`${date}T00:00:00`);
@@ -114,7 +130,18 @@ export function Analytics() {
   const [customStart, setCustomStart] = useState(shiftDate(today, -30));
   const [customEnd, setCustomEnd] = useState(today);
   const [metric, setMetric] = useState<MetricKey>("usd");
-  const [selected, setSelected] = useState<string[] | null>(null); // null = "not touched yet" -> default selection
+  // null = "not touched yet" -> default selection. Once touched, the choice is
+  // remembered in this browser so the toggles stay where you left them.
+  const [selected, setSelected] = useState<string[] | null>(loadSelectedPlatforms);
+
+  useEffect(() => {
+    if (selected === null) return;
+    try {
+      window.localStorage.setItem(SELECTED_PLATFORMS_KEY, JSON.stringify(selected));
+    } catch {
+      /* storage unavailable — toggles just won't persist */
+    }
+  }, [selected]);
 
   const selectedIds = selected ?? platforms.filter((p) => p.status !== "inactive").map((p) => p.id);
 
@@ -225,7 +252,10 @@ export function Analytics() {
 
   const cumulativeChartConfig = useMemo<ChartConfig>(
     () => ({
-      average: { label: `${TREND_WINDOW}-day average, all selected platforms combined`, color: "#34d399" },
+      average: {
+        label: `${TREND_WINDOW}-day average, all selected platforms combined`,
+        color: "#34d399",
+      },
     }),
     [],
   );
@@ -430,9 +460,9 @@ export function Analytics() {
         </div>
         {!isCumulativeMetric ? (
           <p className="py-16 text-center text-xs text-muted-foreground">
-            A per-hour rate can't be combined across multiple platforms by simple addition —
-            switch the metric above to USD, Tokens, Hours, or Followers to see the growth trend
-            across your whole lineup.
+            A per-hour rate can't be combined across multiple platforms by simple addition — switch
+            the metric above to USD, Tokens, Hours, or Followers to see the growth trend across your
+            whole lineup.
           </p>
         ) : cumulativeData.length === 0 || selectedIds.length === 0 ? (
           <p className="py-16 text-center text-xs text-muted-foreground">

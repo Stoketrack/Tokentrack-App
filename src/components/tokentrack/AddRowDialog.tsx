@@ -44,6 +44,11 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
   const [currentUsdInput, setCurrentUsdInput] = useState("");
   const [currentTokensInput, setCurrentTokensInput] = useState("");
   const [lastEditedField, setLastEditedField] = useState<EarningsField | null>(null);
+  // Catch-up / equalisation entry: the figure typed is simply what the
+  // platform shows, and any difference from the card is an adjustment rather
+  // than a night's earnings — so the "lower than previous" warnings, which
+  // exist to catch an unlogged payout or counter reset, are switched off.
+  const [adjustmentMode, setAdjustmentMode] = useState(false);
   const [note, setNote] = useState("");
   const [listening, setListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
@@ -535,7 +540,7 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
                   placeholder="e.g. 65.00"
                   className={`${compactField} text-token`}
                 />
-                {lastEditedField === "currentUsd" && dollarsEarnedNegative && (
+                {!adjustmentMode && lastEditedField === "currentUsd" && dollarsEarnedNegative && (
                   <p className="mt-0.5 text-[9px] text-token">
                     Lower than the previous total — likely a payout not yet logged, or a counter
                     reset.
@@ -588,7 +593,7 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
                   placeholder="e.g. 1300"
                   className={`${compactField} text-token`}
                 />
-                {lastEditedField === "currentTokens" && tokensEarnedNegative && (
+                {!adjustmentMode && lastEditedField === "currentTokens" && tokensEarnedNegative && (
                   <p className="mt-0.5 text-[9px] text-token">
                     Lower than the previous total — likely a payout not yet logged, or a counter
                     reset.
@@ -610,6 +615,20 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
                 />
               </div>
             </div>
+
+            <label className="flex items-start gap-1.5 text-[10px] text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={adjustmentMode}
+                onChange={(e) => setAdjustmentMode(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Catch-up / balance adjustment — just align the card to the platform's figure. The
+                difference is saved as an adjustment (can be negative or zero) and no warnings are
+                shown.
+              </span>
+            </label>
 
             {!rate && (
               <p className="text-[9px] text-muted-foreground">
