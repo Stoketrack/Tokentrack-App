@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { fmtPhp, fmtUsd, useTokenTrack } from "@/lib/tokentrack/store";
 import type { Platform, PlatformStatus } from "@/lib/tokentrack/types";
 
@@ -6,14 +7,66 @@ const STATUSES: PlatformStatus[] = ["active", "testing", "inactive"];
 const field =
   "w-full rounded-md border border-input bg-console px-2 py-1.5 text-xs outline-none focus:border-ring h-8";
 
+/** Same parsing every platform's token-value box uses — never platform-specific. */
+function parseTokenValue(raw: string): number | null {
+  if (raw.trim() === "" || raw === "-" || raw === "." || raw === "-.") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * The box shows exactly what you typed, not a round-trip through Number().
+ * Feeding the parsed number straight back into the input's value (as the
+ * old inline version did) turns "0." into "0" the instant you type the
+ * decimal point — Number("0.") is 0, and 0 renders back as "0" — which
+ * makes it impossible to type any rate starting with "0." at all,
+ * on any platform. Local text state avoids that: the number is still
+ * parsed and saved on every keystroke, but the box's own text is never
+ * overwritten by the numeric result.
+ */
+function TokenValueField({
+  platform,
+  onCommit,
+}: {
+  platform: Platform;
+  onCommit: (v: number | null) => void;
+}) {
+  const [raw, setRaw] = useState(() =>
+    platform.tokenValueUsd !== null && platform.tokenValueUsd !== undefined
+      ? String(platform.tokenValueUsd)
+      : "",
+  );
+
+  // Re-sync if the saved value changes from outside this box (e.g. loading
+  // a different platform's data) without fighting whatever is mid-typing.
+  useEffect(() => {
+    if (parseTokenValue(raw) === platform.tokenValueUsd) return;
+    setRaw(
+      platform.tokenValueUsd !== null && platform.tokenValueUsd !== undefined
+        ? String(platform.tokenValueUsd)
+        : "",
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [platform.tokenValueUsd]);
+
+  return (
+    <input
+      className={`${field} numeric`}
+      inputMode="decimal"
+      value={raw}
+      placeholder="—"
+      onChange={(e) => {
+        const next = e.target.value;
+        if (!/^-?\d*\.?\d*$/.test(next)) return; // only ever what a decimal number can look like mid-entry
+        setRaw(next);
+        onCommit(parseTokenValue(next));
+      }}
+    />
+  );
+}
+
 export function PlatformSettings() {
   const { platforms, updatePlatform, usdPhpRate, rateIsLive, rateUpdatedAt } = useTokenTrack();
-
-  const num = (raw: string): number | null => {
-    if (raw.trim() === "") return null;
-    const n = Number(raw.replace(/[^0-9.\-]/g, ""));
-    return Number.isFinite(n) ? n : null;
-  };
 
   return (
     <div className="mx-auto w-full max-w-[1100px] space-y-4 p-6">
@@ -71,12 +124,9 @@ export function PlatformSettings() {
                 </select>
               </Labelled>
               <Labelled label="Token value (USD)">
-                <input
-                  className={`${field} numeric`}
-                  inputMode="decimal"
-                  value={p.tokenValueUsd ?? ""}
-                  placeholder="—"
-                  onChange={(e) => updatePlatform(p.id, { tokenValueUsd: num(e.target.value) })}
+                <TokenValueField
+                  platform={p}
+                  onCommit={(v) => updatePlatform(p.id, { tokenValueUsd: v })}
                 />
               </Labelled>
               <Labelled label="Payment destination">
@@ -87,10 +137,10 @@ export function PlatformSettings() {
                   onChange={(e) => updatePlatform(p.id, { payoutDestination: e.target.value })}
                 />
               </Labelled>
-              <Labelled label="Payout information">
+              <Labelled label="Payout information" className="col-span-2">
                 <textarea
-                  className="min-h-8 w-full resize-y rounded-md border border-input bg-console px-2 py-1.5 text-xs leading-snug outline-none focus:border-ring"
-                  rows={2}
+                  className="min-h-16 w-full resize-y rounded-md border border-input bg-console px-2 py-1.5 text-xs leading-snug outline-none focus:border-ring"
+                  rows={3}
                   value={p.payoutInfo ?? ""}
                   placeholder="Account ref, schedule, minimum, timelines…"
                   onChange={(e) => updatePlatform(p.id, { payoutInfo: e.target.value })}
@@ -123,9 +173,17 @@ export function PlatformSettings() {
   );
 }
 
-function Labelled({ label, children }: { label: string; children: React.ReactNode }) {
+function Labelled({
+  label,
+  children,
+  className,
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <label className="block">
+    <label className={`block ${className ?? ""}`}>
       <span className="label-micro mb-1 block">{label}</span>
       {children}
     </label>

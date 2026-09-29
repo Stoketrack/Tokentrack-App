@@ -1236,22 +1236,23 @@ export function TokenTrackProvider({ children }: { children: ReactNode }) {
           });
       },
       updatePlatform: (id, patch) => {
+        // Unlike addRow/updateRow/deleteRow/addPayout, this drives Settings
+        // text fields that fire on every keystroke — waiting for a network
+        // round-trip before showing what was typed (the confirm-then-commit
+        // pattern used for entries/payouts) makes normal typing drop
+        // characters. A failed settings save can just be retried; it
+        // doesn't silently corrupt a running balance the way a lost entry
+        // or payout would, so it's safe to stay optimistic here.
+        setState((s) => ({
+          ...s,
+          platforms: s.platforms.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+        }));
         void supabase
           .from("tokentrack_platforms")
           .update(platformPatchToDb(patch))
           .eq("id", id)
           .then(({ error }) => {
-            if (error) {
-              console.error(
-                "Failed to persist platform update — left showing the last saved settings:",
-                error,
-              );
-              return;
-            }
-            setState((s) => ({
-              ...s,
-              platforms: s.platforms.map((p) => (p.id === id ? { ...p, ...patch } : p)),
-            }));
+            if (error) console.error("Failed to persist platform update:", error);
           });
       },
       setPanel: (platformId, patch) =>
