@@ -68,8 +68,20 @@ function shiftDate(date: string, days: number) {
 }
 
 function Dashboard() {
-  const { platforms, layout, workingDate, setWorkingDate, setPanel, resetLayout, restoreAll, ready } =
-    useTokenTrack();
+  const {
+    platforms,
+    layout,
+    workingDate,
+    setWorkingDate,
+    setPanel,
+    resetLayout,
+    restoreAll,
+    ready,
+    cardPositions,
+    setCardPosition,
+    resetCardPositions,
+    backgroundImageUrl,
+  } = useTokenTrack();
   const [view, setView] = useState<string>("Dashboard");
   const [addFor, setAddFor] = useState<string | null>(null);
   const [payoutFor, setPayoutFor] = useState<string | null>(null);
@@ -107,25 +119,13 @@ function Dashboard() {
   const cellWidth = columns === 1 ? usableWidth : PANEL_WIDTH;
   const cellHeight = 300;
 
-  // The currently-visible cards, in their saved slot order. Minimised cards
-  // are simply left out of this list (same as before) — their slot is
-  // preserved so they reappear in the right place once un-minimised.
+  // The currently-visible cards, in their saved slot order — this is only
+  // the default grid position now; a card with a free-dragged position
+  // (cardPositions) uses that instead, until Snap Back clears it.
   const orderedVisible = useMemo(
     () => [...visible].sort((a, b) => (layout[a.id]?.slot ?? 0) - (layout[b.id]?.slot ?? 0)),
     [visible, layout],
   );
-
-  const handleReorder = (platformId: string, targetIndex: number) => {
-    const draggedLayout = layout[platformId];
-    const targetPlatform = orderedVisible[targetIndex];
-    if (!draggedLayout || !targetPlatform || targetPlatform.id === platformId) return;
-    const targetLayout = layout[targetPlatform.id];
-    if (!targetLayout) return;
-    // A straight swap of slot numbers — always a valid permutation, so two
-    // cards can never end up claiming the same slot.
-    setPanel(platformId, { slot: targetLayout.slot });
-    setPanel(targetPlatform.id, { slot: draggedLayout.slot });
-  };
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-console">
@@ -245,7 +245,11 @@ function Dashboard() {
             : "flex min-h-0 flex-1"
         }
       >
-        <div ref={canvasRef} className="relative min-w-0 flex-1 overflow-auto p-6">
+        <div
+          ref={canvasRef}
+          className="relative min-w-0 flex-1 overflow-auto bg-cover bg-center p-6"
+          style={backgroundImageUrl ? { backgroundImage: `url(${backgroundImageUrl})` } : undefined}
+        >
           {ready &&
             orderedVisible.map((p, i) => (
               <PlatformPanel
@@ -263,7 +267,8 @@ function Dashboard() {
                 }}
                 zIndex={zFor(p.id)}
                 onFocus={() => focus(p.id)}
-                onReorder={(targetIndex) => handleReorder(p.id, targetIndex)}
+                position={cardPositions[p.id] ?? null}
+                onPositionChange={(pos) => setCardPosition(p.id, pos)}
                 onAddRow={() => setAddFor(p.id)}
                 onAddPayout={() => setPayoutFor(p.id)}
                 onOpenDetail={() => setDetailFor(p.id)}
@@ -284,7 +289,10 @@ function Dashboard() {
       <footer className="flex h-11 shrink-0 items-center gap-3 overflow-x-auto border-t border-border bg-console px-4">
         <button
           type="button"
-          onClick={resetLayout}
+          onClick={() => {
+            resetLayout();
+            resetCardPositions();
+          }}
           title="Reset all six cards to the normal dashboard grid — position only, no data is changed"
           className="flex shrink-0 items-center gap-1.5 rounded border border-ring bg-secondary px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-foreground hover:opacity-90"
         >

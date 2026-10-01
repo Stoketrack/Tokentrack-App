@@ -23,18 +23,25 @@ const DRAG_THRESHOLD = 6;
 
 interface Props {
   platform: Platform;
-  /** This card's position among the currently-visible cards (0-based, row-major). */
+  /** This card's position among the currently-visible cards (0-based, row-major) — used for the default grid slot only. */
   gridIndex: number;
   /** How many cards fit per row at the current screen size. */
   columns: number;
   cellWidth: number;
   cellHeight: number;
   gap: number;
-  /** How many cards are currently visible — used to keep a drop target in range. */
+  /** How many cards are currently visible — used to size the default drag area. */
   totalVisible: number;
   bounds: { width: number; height: number };
-  /** Called when a drag ends on a new grid position; the parent performs the actual slot swap. */
-  onReorder: (targetGridIndex: number) => void;
+  /**
+   * A free-dragged pixel position, or null to use the normal grid slot
+   * (`gridIndex`/`columns`). Once set, this is the card's resting position
+   * until the position is cleared (Snap Back) — it is never recalculated
+   * from the grid in the meantime.
+   */
+  position: { x: number; y: number } | null;
+  /** Called with the raw dropped pixel position every time a drag ends — never snapped to a grid cell. */
+  onPositionChange: (pos: { x: number; y: number }) => void;
   onAddRow: () => void;
   onAddPayout: () => void;
   onOpenDetail: () => void;
@@ -51,7 +58,8 @@ export function PlatformPanel({
   gap,
   totalVisible,
   bounds,
-  onReorder,
+  position,
+  onPositionChange,
   onAddRow,
   onAddPayout,
   onOpenDetail,
@@ -77,14 +85,18 @@ export function PlatformPanel({
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState({ x: 0, y: 0 });
 
-  // A card's resting position is always derived from its grid slot — never
-  // stored as a free pixel coordinate — so it's mathematically impossible
-  // for two cards to end up overlapping, and the layout is automatically
-  // correct on any screen size the moment `columns` changes.
+  // Default grid slot — only used while this card has no free-dragged
+  // position of its own (`position` below is null).
   const col = gridIndex % columns;
   const row = Math.floor(gridIndex / columns);
   const baseX = col * (cellWidth + gap);
   const baseY = row * (cellHeight + gap);
+
+  // Once a card has been dragged, its resting position is exactly where it
+  // was dropped — never recalculated from the grid — until "Snap Back" is
+  // clicked (which clears `position` for every card at once).
+  const restX = position?.x ?? baseX;
+  const restY = position?.y ?? baseY;
 
   const startDrag = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -93,16 +105,14 @@ export function PlatformPanel({
     let thresholdMet = false;
     (e.target as Element).setPointerCapture?.(e.pointerId);
 
-    // The Y bound must be the full grid's row extent, not the visible
-    // canvas viewport — on mobile portrait the 6-card stack is far taller
-    // than what's on screen at once, and clamping to the viewport made it
-    // impossible to ever drag a card down into row 4/5/6 at all.
+    // Free placement, not grid reordering, so the only real constraint is
+    // staying on-screen — not snapping to any row/column math. The Y bound
+    // is generous (well past where six grid-stacked cards would end) so
+    // there's real room to spread cards out over a background image.
     const maxRow = Math.max(0, Math.ceil(totalVisible / columns) - 1);
-    const maxY = maxRow * (cellHeight + gap);
+    const maxY = Math.max(bounds.height - cellHeight, (maxRow + 4) * (cellHeight + gap));
 
     const clamp = (x: number, y: number) => ({
-      // X can safely clamp to the visible canvas width — columns are sized
-      // to always fit within it, so this never restricts a valid drop.
       x: Math.min(Math.max(x, 0), Math.max(bounds.width - cellWidth, 0)),
       y: Math.min(Math.max(y, 0), maxY),
     });
@@ -117,7 +127,7 @@ export function PlatformPanel({
         thresholdMet = true;
         setDragging(true);
       }
-      setDragPos(clamp(baseX + dx, baseY + dy));
+      setDragPos(clamp(restX + dx, restY + dy));
     };
 
     const up = (ev: PointerEvent) => {
@@ -127,16 +137,11 @@ export function PlatformPanel({
 
       const dx = ev.clientX - start.px;
       const dy = ev.clientY - start.py;
-      const finalPos = clamp(baseX + dx, baseY + dy);
-      // Snap to whichever grid cell the card was dropped nearest to.
-      const targetCol = Math.round(finalPos.x / (cellWidth + gap));
-      const targetRow = Math.round(finalPos.y / (cellHeight + gap));
-      const targetIndex = Math.min(
-        Math.max(targetRow * columns + targetCol, 0),
-        Math.max(totalVisible - 1, 0),
-      );
+      // Exactly where it was dropped — no snapping, no reordering. Releasing
+      // a card must never trigger a reset; only the Snap Back button does.
+      const finalPos = clamp(restX + dx, restY + dy);
       setDragging(false);
-      onReorder(targetIndex);
+      onPositionChange(finalPos);
     };
 
     window.addEventListener("pointermove", move);
@@ -149,8 +154,8 @@ export function PlatformPanel({
     <article
       onPointerDown={onFocus}
       style={{
-        left: dragging ? dragPos.x : baseX,
-        top: dragging ? dragPos.y : baseY,
+        left: dragging ? dragPos.x : restX,
+        top: dragging ? dragPos.y : restY,
         width: cellWidth,
         zIndex,
       }}

@@ -123,11 +123,78 @@ interface PersistedState {
   rows: EntryRow[];
   payouts: Payout[];
   layout: Record<string, PanelLayout>;
+  settings: DashboardSettings;
+}
+
+/**
+ * Account-level dashboard configuration: the background photo, header
+ * avatar photo, and any free-dragged card positions. Unlike `layout`
+ * (slot/minimised — browser-only), this is stored in Supabase, since it's
+ * explicitly "account configuration" that should survive across devices,
+ * not just across a refresh in the same browser.
+ */
+export interface DashboardSettings {
+  backgroundImageUrl: string | null;
+  avatarImageUrl: string | null;
+  /** A platform missing here simply uses its normal grid slot. */
+  cardPositions: Record<string, { x: number; y: number }>;
+}
+
+const defaultSettings = (): DashboardSettings => ({
+  backgroundImageUrl: null,
+  avatarImageUrl: null,
+  cardPositions: {},
+});
+
+function dbToSettings(row: Record<string, unknown> | null): DashboardSettings {
+  if (!row) return defaultSettings();
+  const positionsRaw = row["card_positions"];
+  const cardPositions: Record<string, { x: number; y: number }> = {};
+  if (positionsRaw && typeof positionsRaw === "object") {
+    for (const [id, v] of Object.entries(positionsRaw as Record<string, unknown>)) {
+      const x = (v as { x?: unknown })?.x;
+      const y = (v as { y?: unknown })?.y;
+      if (
+        typeof x === "number" &&
+        typeof y === "number" &&
+        Number.isFinite(x) &&
+        Number.isFinite(y)
+      ) {
+        cardPositions[id] = { x, y };
+      }
+    }
+  }
+  return {
+    backgroundImageUrl:
+      typeof row["background_image_url"] === "string"
+        ? (row["background_image_url"] as string)
+        : null,
+    avatarImageUrl:
+      typeof row["avatar_image_url"] === "string" ? (row["avatar_image_url"] as string) : null,
+    cardPositions,
+  };
 }
 
 /** Fallback used only until the live USD/PHP rate arrives. Never user-editable. */
 export const FALLBACK_USD_PHP_RATE = 58.5;
 const RATE_CACHE_KEY = "tokentrack.fx.usdphp";
+
+const ACCEPTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+/** Shared by both the background and avatar uploads — same bucket, same validation. */
+async function uploadToMediaBucket(file: File, folder: "backgrounds" | "avatars"): Promise<string> {
+  if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
+    throw new Error("Please choose a JPG, PNG, or WebP image.");
+  }
+  const ext = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
+  const path = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const { error } = await supabase.storage
+    .from("tokentrack-media")
+    .upload(path, file, { upsert: true, contentType: file.type });
+  if (error) throw new Error(`Upload failed: ${error.message}`);
+  const { data } = supabase.storage.from("tokentrack-media").getPublicUrl(path);
+  return data.publicUrl;
+}
 
 const defaultLayout = (platforms: Platform[]): Record<string, PanelLayout> => {
   const out: Record<string, PanelLayout> = {};
@@ -191,6 +258,7 @@ const emptyState = (): PersistedState => ({
   rows: [],
   payouts: [],
   layout: defaultLayout(DEFAULT_PLATFORMS),
+  settings: defaultSettings(),
 });
 
 /** Bring stored records forward without ever discarding history. */
@@ -649,6 +717,22 @@ interface StoreValue {
    */
   resetLayout: () => void;
   restoreAll: () => void;
+  /** Dashboard background photo URL, or null for the default background. */
+  backgroundImageUrl: string | null;
+  /** Header avatar photo URL, or null for the default person icon. */
+  avatarImageUrl: string | null;
+  /** A platform missing here simply uses its normal grid slot. */
+  cardPositions: Record<string, { x: number; y: number }>;
+  /** Uploads and sets the dashboard background photo. Throws with a readable message on failure. */
+  uploadBackgroundImage: (file: File) => Promise<void>;
+  /** Clears the background photo, reverting to the default background. */
+  removeBackgroundImage: () => void;
+  /** Uploads and sets the header avatar photo. Throws with a readable message on failure. */
+  uploadAvatarImage: (file: File) => Promise<void>;
+  /** Saves (or clears, with null) a platform's free-dragged pixel position. */
+  setCardPosition: (platformId: string, pos: { x: number; y: number } | null) => void;
+  /** Clears every free-dragged position — cards fall back to the normal grid. Manual only, never automatic. */
+  resetCardPositions: () => void;
 }
 
 export interface PlatformSummary {
@@ -706,19 +790,26 @@ export function TokenTrackProvider({ children }: { children: ReactNode }) {
 
       // 2. Load all operational data from Supabase
       try {
-        const [platformsRes, entriesRes, payoutsRes] = await Promise.all([
+        const [platformsRes, entriesRes, payoutsRes, settingsRes] = await Promise.all([
           supabase.from("tokentrack_platforms").select("*").order("slot"),
           supabase.from("tokentrack_entries").select("*"),
           supabase.from("tokentrack_payouts").select("*"),
+          // Missing table/row (e.g. the migration hasn't been applied yet)
+          // degrades to defaults rather than breaking the rest of the app —
+          // this is purely cosmetic account config, not operational data.
+          supabase.from("tokentrack_settings").select("*").eq("id", "default").maybeSingle(),
         ]);
 
         if (platformsRes.error) throw platformsRes.error;
         if (entriesRes.error) throw entriesRes.error;
         if (payoutsRes.error) throw payoutsRes.error;
+        if (settingsRes.error)
+          console.error("Failed to load dashboard settings:", settingsRes.error);
 
         const platforms = (platformsRes.data ?? []).map(dbToPlatform);
         const rows = (entriesRes.data ?? []).map(dbToEntryRow);
         const payouts = (payoutsRes.data ?? []).map(dbToPayout);
+        const settings = dbToSettings(settingsRes.data as Record<string, unknown> | null);
 
         if (!cancelled) {
           setState({
@@ -726,6 +817,7 @@ export function TokenTrackProvider({ children }: { children: ReactNode }) {
             rows,
             payouts,
             layout,
+            settings,
           });
         }
       } catch (e) {
@@ -1108,6 +1200,9 @@ export function TokenTrackProvider({ children }: { children: ReactNode }) {
       rows: state.rows,
       payouts: state.payouts,
       layout: state.layout,
+      backgroundImageUrl: state.settings.backgroundImageUrl,
+      avatarImageUrl: state.settings.avatarImageUrl,
+      cardPositions: state.settings.cardPositions,
       usdPhpRate: fx.rate,
       rateUpdatedAt: fx.updatedAt,
       rateIsLive: fx.live,
@@ -1274,6 +1369,66 @@ export function TokenTrackProvider({ children }: { children: ReactNode }) {
             Object.entries(s.layout).map(([k, v]) => [k, { ...v, minimised: false }]),
           ),
         })),
+      uploadBackgroundImage: async (file) => {
+        const url = await uploadToMediaBucket(file, "backgrounds");
+        setState((s) => ({ ...s, settings: { ...s.settings, backgroundImageUrl: url } }));
+        const { error } = await supabase
+          .from("tokentrack_settings")
+          .upsert({ id: "default", background_image_url: url }, { onConflict: "id" });
+        if (error) console.error("Failed to save background photo:", error);
+      },
+      removeBackgroundImage: () => {
+        setState((s) => ({ ...s, settings: { ...s.settings, backgroundImageUrl: null } }));
+        void supabase
+          .from("tokentrack_settings")
+          .upsert({ id: "default", background_image_url: null }, { onConflict: "id" })
+          .then(({ error }) => {
+            if (error) console.error("Failed to clear background photo:", error);
+          });
+      },
+      uploadAvatarImage: async (file) => {
+        const url = await uploadToMediaBucket(file, "avatars");
+        setState((s) => ({ ...s, settings: { ...s.settings, avatarImageUrl: url } }));
+        const { error } = await supabase
+          .from("tokentrack_settings")
+          .upsert({ id: "default", avatar_image_url: url }, { onConflict: "id" });
+        if (error) console.error("Failed to save avatar photo:", error);
+      },
+      setCardPosition: (platformId, pos) => {
+        setState((s) => {
+          const cardPositions = { ...s.settings.cardPositions };
+          if (pos) cardPositions[platformId] = pos;
+          else delete cardPositions[platformId];
+          return { ...s, settings: { ...s.settings, cardPositions } };
+        });
+        void supabase
+          .from("tokentrack_settings")
+          .upsert(
+            {
+              id: "default",
+              card_positions: pos
+                ? { ...state.settings.cardPositions, [platformId]: pos }
+                : Object.fromEntries(
+                    Object.entries(state.settings.cardPositions).filter(
+                      ([id]) => id !== platformId,
+                    ),
+                  ),
+            },
+            { onConflict: "id" },
+          )
+          .then(({ error }) => {
+            if (error) console.error("Failed to save card position:", error);
+          });
+      },
+      resetCardPositions: () => {
+        setState((s) => ({ ...s, settings: { ...s.settings, cardPositions: {} } }));
+        void supabase
+          .from("tokentrack_settings")
+          .upsert({ id: "default", card_positions: {} }, { onConflict: "id" })
+          .then(({ error }) => {
+            if (error) console.error("Failed to reset card positions:", error);
+          });
+      },
     }),
     [
       ready,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fmtPhp, fmtUsd, useTokenTrack } from "@/lib/tokentrack/store";
 import type { Platform, PlatformStatus } from "@/lib/tokentrack/types";
 
@@ -66,7 +66,34 @@ function TokenValueField({
 }
 
 export function PlatformSettings() {
-  const { platforms, updatePlatform, usdPhpRate, rateIsLive, rateUpdatedAt } = useTokenTrack();
+  const {
+    platforms,
+    updatePlatform,
+    usdPhpRate,
+    rateIsLive,
+    rateUpdatedAt,
+    backgroundImageUrl,
+    uploadBackgroundImage,
+    removeBackgroundImage,
+  } = useTokenTrack();
+  const [bgUploading, setBgUploading] = useState(false);
+  const [bgError, setBgError] = useState<string | null>(null);
+  const bgFileRef = useRef<HTMLInputElement | null>(null);
+
+  const onPickBackground = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBgError(null);
+    setBgUploading(true);
+    try {
+      await uploadBackgroundImage(file);
+    } catch (err) {
+      setBgError(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setBgUploading(false);
+    }
+  };
 
   return (
     <div className="mx-auto w-full max-w-[1100px] space-y-4 p-6">
@@ -163,6 +190,52 @@ export function PlatformSettings() {
           </section>
         ))}
       </div>
+
+      <section className="rounded-xl border border-border bg-panel p-3">
+        <p className="label-micro mb-1">Dashboard Background Photo</p>
+        <p className="mb-2 text-xs text-muted-foreground">
+          Shown behind the dashboard cards, which float on top of it.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          {backgroundImageUrl && (
+            <img
+              src={backgroundImageUrl}
+              alt=""
+              className="h-14 w-24 rounded-md border border-border object-cover"
+            />
+          )}
+          <input
+            ref={bgFileRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            className="hidden"
+            onChange={onPickBackground}
+          />
+          <button
+            type="button"
+            onClick={() => bgFileRef.current?.click()}
+            disabled={bgUploading}
+            className="rounded-md border border-border bg-console px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary disabled:opacity-60"
+          >
+            {bgUploading
+              ? "Uploading…"
+              : backgroundImageUrl
+                ? "Change background photo"
+                : "Dashboard Background Photo"}
+          </button>
+          {backgroundImageUrl && (
+            <button
+              type="button"
+              onClick={removeBackgroundImage}
+              className="text-xs text-muted-foreground underline decoration-dotted hover:text-foreground"
+            >
+              Remove background
+            </button>
+          )}
+        </div>
+        {bgError && <p className="mt-2 text-[11px] text-token">{bgError}</p>}
+        <p className="mt-2 text-[10px] text-muted-foreground">JPG, PNG, or WebP.</p>
+      </section>
 
       <p className="text-[11px] text-muted-foreground">
         Token values are platform-specific — there is no global conversion rate. The USD/PHP rate is
