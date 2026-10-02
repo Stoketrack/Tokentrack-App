@@ -1,5 +1,5 @@
 import type { DerivedRow, EntryRow } from "./types";
-import { deriveRow } from "./store";
+import { deriveRow, timeOfDayFrom } from "./store";
 
 export type MetricKey = "usd" | "tokens" | "usdPerHour" | "tokensPerHour" | "followers" | "hours";
 
@@ -357,6 +357,96 @@ export function buildTimeSeries(
     points: bucketKeys.map((k) => points[k]).filter((p): p is SeriesPoint => p !== undefined),
     granularity,
   };
+}
+
+// ── Added for the second row of Analytics metric cards ───────────────────
+// These are purely additive — every existing function above is untouched,
+// and none of these change what any existing card computes or displays.
+
+/** Same shape as rowsInRange, but for a set of selected platforms rather than one/"all". */
+function rowsInRangeForPlatforms(
+  rows: EntryRow[],
+  platformIds: string[],
+  start: string,
+  end: string,
+): EntryRow[] {
+  return rows.filter((r) => platformIds.includes(r.platformId) && r.date >= start && r.date <= end);
+}
+
+export interface BestDayResult {
+  date: string;
+  totalUsd: number;
+}
+
+/** Highest-earning single calendar day — summed across every selected platform — within the range. */
+export function bestDay(
+  rows: EntryRow[],
+  platformIds: string[],
+  start: string,
+  end: string,
+): BestDayResult | null {
+  const derived = toDerived(rowsInRangeForPlatforms(rows, platformIds, start, end));
+  if (derived.length === 0) return null;
+  const byDate = new Map<string, number>();
+  for (const r of derived) byDate.set(r.date, (byDate.get(r.date) ?? 0) + r.usdValue);
+  let best: BestDayResult | null = null;
+  for (const [date, totalUsd] of byDate) {
+    if (!best || totalUsd > best.totalUsd) best = { date, totalUsd: round2(totalUsd) };
+  }
+  return best;
+}
+
+export interface BestTimeResult {
+  band: string;
+  totalUsd: number;
+}
+
+/**
+ * Strongest time-of-day band (Night/Morning/Afternoon/Evening) by total USD,
+ * across the selected platforms within the range. Uses each row's own
+ * recorded `timeOfDay` when present (falling back to deriving it from
+ * `startTime` for older rows that predate that field) — never re-buckets
+ * using today's band boundaries if they ever change, consistent with how
+ * the time was actually recorded. Sessions with no time of day at all are
+ * excluded, since there's nothing to band them by.
+ */
+export function bestTimeOfDay(
+  rows: EntryRow[],
+  platformIds: string[],
+  start: string,
+  end: string,
+): BestTimeResult | null {
+  const derived = toDerived(rowsInRangeForPlatforms(rows, platformIds, start, end));
+  const byBand = new Map<string, number>();
+  for (const r of derived) {
+    const band = r.timeOfDay ?? timeOfDayFrom(r.startTime);
+    if (!band) continue;
+    byBand.set(band, (byBand.get(band) ?? 0) + r.usdValue);
+  }
+  let best: BestTimeResult | null = null;
+  for (const [band, totalUsd] of byBand) {
+    if (!best || totalUsd > best.totalUsd) best = { band, totalUsd: round2(totalUsd) };
+  }
+  return best;
+}
+
+export interface BestSessionResult {
+  date: string;
+  platformId: string;
+  usdValue: number;
+}
+
+/** The single highest-earning individual session (one logged row) across the selected platforms within the range. */
+export function bestSession(
+  rows: EntryRow[],
+  platformIds: string[],
+  start: string,
+  end: string,
+): BestSessionResult | null {
+  const derived = toDerived(rowsInRangeForPlatforms(rows, platformIds, start, end));
+  if (derived.length === 0) return null;
+  const best = derived.reduce((b, r) => (r.usdValue > b.usdValue ? r : b));
+  return { date: best.date, platformId: best.platformId, usdValue: round2(best.usdValue) };
 }
 
 export function earliestDate(rows: EntryRow[], fallback: string): string {

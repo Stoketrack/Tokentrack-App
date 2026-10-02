@@ -9,7 +9,10 @@ import {
 } from "@/components/ui/chart";
 import { TrendBadge } from "@/components/tokentrack/TrendBadge";
 import {
+  bestDay,
   bestPerformingPlatform,
+  bestSession,
+  bestTimeOfDay,
   biggestDecline,
   buildTimeSeries,
   computePlatformMovement,
@@ -202,6 +205,37 @@ export function Analytics() {
     return { totalUsd, totalTokens, totalHours, avgUsdPerHour, avgTokensPerHour, followerChange };
   }, [statsByPlatform, selectedIds]);
 
+  // ── Second row of metric cards — all built from the exact same
+  // date-range/platform-filtered inputs as the cards above, so they
+  // automatically respect both controls without any extra wiring.
+  const bestDayResult = useMemo(
+    () => bestDay(rows, selectedIds, start, end),
+    [rows, selectedIds, start, end],
+  );
+  const bestTimeResult = useMemo(
+    () => bestTimeOfDay(rows, selectedIds, start, end),
+    [rows, selectedIds, start, end],
+  );
+  const bestSessionResult = useMemo(
+    () => bestSession(rows, selectedIds, start, end),
+    [rows, selectedIds, start, end],
+  );
+  const followersPerHour =
+    combined.followerChange !== null && combined.totalHours > 0
+      ? Math.round((combined.followerChange / combined.totalHours) * 100) / 100
+      : null;
+  const sessionCount = useMemo(
+    () =>
+      statsByPlatform
+        .filter((s) => selectedIds.includes(s.platformId))
+        .reduce((sum, s) => sum + s.sessionCount, 0),
+    [statsByPlatform, selectedIds],
+  );
+  const bestPlatformId = useMemo(
+    () => bestPerformingPlatform(statsByPlatform.filter((s) => selectedIds.includes(s.platformId))),
+    [statsByPlatform, selectedIds],
+  );
+
   const { points: seriesPoints, granularity } = useMemo(
     () => buildTimeSeries(rows, selectedIds, metric, start, end),
     [rows, selectedIds, metric, start, end],
@@ -390,6 +424,38 @@ export function Analytics() {
         />
       </div>
 
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        <SummaryCard
+          label="Best day"
+          value={bestDayResult ? `${fmtUsd(bestDayResult.totalUsd)}` : "—"}
+          sub={bestDayResult?.date}
+        />
+        <SummaryCard
+          label="Best time"
+          value={bestTimeResult ? bestTimeResult.band : "—"}
+          sub={bestTimeResult ? fmtUsd(bestTimeResult.totalUsd) : undefined}
+        />
+        <SummaryCard
+          label="Best session"
+          value={bestSessionResult ? fmtUsd(bestSessionResult.usdValue) : "—"}
+          sub={
+            bestSessionResult
+              ? `${platformName(bestSessionResult.platformId)} · ${bestSessionResult.date}`
+              : undefined
+          }
+        />
+        <SummaryCard
+          label="Followers / hr"
+          value={
+            followersPerHour !== null
+              ? `${followersPerHour > 0 ? "+" : ""}${fmtNum(followersPerHour)}`
+              : "—"
+          }
+        />
+        <SummaryCard label="Sessions" value={fmtNum(sessionCount)} />
+        <SummaryCard label="Best platform" value={platformName(bestPlatformId)} />
+      </div>
+
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
         <InsightCard
           icon={<TrendingUp className="size-3.5" />}
@@ -567,11 +633,20 @@ export function Analytics() {
   );
 }
 
-function SummaryCard({ label, value }: { label: string; value: string }) {
+function SummaryCard({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub?: string | undefined;
+}) {
   return (
     <div className="rounded-lg border border-border bg-panel px-3 py-2.5">
       <p className="label-micro">{label}</p>
       <p className="numeric mt-0.5 text-lg font-semibold leading-none">{value}</p>
+      {sub && <p className="numeric mt-1 truncate text-[10px] text-muted-foreground">{sub}</p>}
     </div>
   );
 }

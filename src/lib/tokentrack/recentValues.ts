@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-const MAX_RECENTS = 10;
+const MAX_RECENTS = 5;
 const STORAGE_PREFIX = "tokentrack.recent";
 
 function storageKey(namespace: string, platformId: string): string {
