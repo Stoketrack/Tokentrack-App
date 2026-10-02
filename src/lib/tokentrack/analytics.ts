@@ -378,14 +378,26 @@ export interface BestDayResult {
   totalUsd: number;
 }
 
-/** Highest-earning single calendar day — summed across every selected platform — within the range. */
+/**
+ * Highest-earning single calendar day — summed across every selected
+ * platform — within the range.
+ *
+ * `excludeDate`, when given, drops rows dated that day before picking a
+ * winner — intended for the single baseline/opening day (the earliest
+ * date across the whole dataset), whose figure is historical catch-up
+ * data rather than a normal comparable streaming day. This affects only
+ * this one calculation: the excluded day still counts normally
+ * everywhere else (totals, charts, averages, platform stats).
+ */
 export function bestDay(
   rows: EntryRow[],
   platformIds: string[],
   start: string,
   end: string,
+  excludeDate?: string,
 ): BestDayResult | null {
-  const derived = toDerived(rowsInRangeForPlatforms(rows, platformIds, start, end));
+  const inRange = rowsInRangeForPlatforms(rows, platformIds, start, end);
+  const derived = toDerived(excludeDate ? inRange.filter((r) => r.date !== excludeDate) : inRange);
   if (derived.length === 0) return null;
   const byDate = new Map<string, number>();
   for (const r of derived) byDate.set(r.date, (byDate.get(r.date) ?? 0) + r.usdValue);
@@ -436,14 +448,23 @@ export interface BestSessionResult {
   usdValue: number;
 }
 
-/** The single highest-earning individual session (one logged row) across the selected platforms within the range. */
+/**
+ * The single highest-earning individual session (one logged row) across
+ * the selected platforms within the range.
+ *
+ * `excludeDate` works exactly as in `bestDay` above — excludes the
+ * baseline/opening day from contention here only, never from any other
+ * calculation.
+ */
 export function bestSession(
   rows: EntryRow[],
   platformIds: string[],
   start: string,
   end: string,
+  excludeDate?: string,
 ): BestSessionResult | null {
-  const derived = toDerived(rowsInRangeForPlatforms(rows, platformIds, start, end));
+  const inRange = rowsInRangeForPlatforms(rows, platformIds, start, end);
+  const derived = toDerived(excludeDate ? inRange.filter((r) => r.date !== excludeDate) : inRange);
   if (derived.length === 0) return null;
   const best = derived.reduce((b, r) => (r.usdValue > b.usdValue ? r : b));
   return { date: best.date, platformId: best.platformId, usdValue: round2(best.usdValue) };

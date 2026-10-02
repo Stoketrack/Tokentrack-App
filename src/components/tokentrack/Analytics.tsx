@@ -209,16 +209,16 @@ export function Analytics() {
   // date-range/platform-filtered inputs as the cards above, so they
   // automatically respect both controls without any extra wiring.
   const bestDayResult = useMemo(
-    () => bestDay(rows, selectedIds, start, end),
-    [rows, selectedIds, start, end],
+    () => bestDay(rows, selectedIds, start, end, dataEarliest),
+    [rows, selectedIds, start, end, dataEarliest],
   );
   const bestTimeResult = useMemo(
     () => bestTimeOfDay(rows, selectedIds, start, end),
     [rows, selectedIds, start, end],
   );
   const bestSessionResult = useMemo(
-    () => bestSession(rows, selectedIds, start, end),
-    [rows, selectedIds, start, end],
+    () => bestSession(rows, selectedIds, start, end, dataEarliest),
+    [rows, selectedIds, start, end, dataEarliest],
   );
   const followersPerHour =
     combined.followerChange !== null && combined.totalHours > 0
