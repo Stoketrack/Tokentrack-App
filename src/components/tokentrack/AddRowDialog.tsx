@@ -404,6 +404,7 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
               type="text"
               inputMode="numeric"
               maxLength={4}
+              autoComplete="off"
               value={startTimeInput}
               onChange={handleStartTimeChange}
               placeholder="0900"
@@ -429,6 +430,7 @@ export function AddRowDialog({ platform, date, onClose }: Props) {
               type="text"
               inputMode="numeric"
               maxLength={4}
+              autoComplete="off"
               value={endTimeInput}
               onChange={handleEndTimeChange}
               placeholder="1300"
