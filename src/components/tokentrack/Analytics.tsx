@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { ArrowDown, ArrowUp, Minus, TrendingUp } from "lucide-react";
 import {
@@ -8,19 +8,21 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { TrendBadge } from "@/components/tokentrack/TrendBadge";
+import { cn } from "@/lib/utils";
+import type { EntryRow } from "@/lib/tokentrack/types";
 import {
-  bestDay,
   bestPerformingPlatform,
-  bestSession,
-  bestTimeOfDay,
   biggestDecline,
   buildTimeSeries,
   computePlatformMovement,
   computePlatformStats,
+  bestWeekdayForPlatform,
+  computeWeekdayStats,
   earliestDate,
   METRIC_LABELS,
   strongestImprovement,
   type MetricKey,
+  type WeekdayStat,
 } from "@/lib/tokentrack/analytics";
 import {
   fmtHours,
@@ -54,22 +56,6 @@ const METRIC_KEYS: MetricKey[] = [
 
 /** Distinct chart-line colors — platform.accent is currently the same value for every platform, so lines are told apart here instead. */
 const LINE_COLORS = ["#f59e0b", "#38bdf8", "#a78bfa", "#34d399", "#fb7185", "#facc15"];
-
-const SELECTED_PLATFORMS_KEY = "tokentrack.analytics.selectedPlatforms.v1";
-
-function loadSelectedPlatforms(): string[] | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(SELECTED_PLATFORMS_KEY);
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.every((x) => typeof x === "string")
-      ? (parsed as string[])
-      : null;
-  } catch {
-    return null;
-  }
-}
 
 function shiftDate(date: string, days: number) {
   const d = new Date(`${date}T00:00:00`);
@@ -124,6 +110,322 @@ function FxWidget() {
   );
 }
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+// Formats a yyyy-mm-dd date in UTC, matching how analytics.ts reads dates, so
+// the label can never drift a day with the viewer's timezone.
+const shortDate = (date: string) =>
+  new Date(`${date}T00:00:00Z`).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  });
+
+/** Below this many streaming days, even a qualifying weekday is only an early indication. */
+const EARLY_INDICATION_DAYS = 4;
+
+type PlatformLabels = Record<string, { short: string; full: string }>;
+
+/** Every selected platform's results on one weekday — streamed or not — so each is individually identifiable. */
+function PlatformBreakdown({ stat, labels }: { stat: WeekdayStat; labels: PlatformLabels }) {
+  // Platforms that streamed first, biggest earner at the top; the rest stay listed, dimmed.
+  const ordered = [...stat.platforms].sort(
+    (a, b) => Number(b.dayCount > 0) - Number(a.dayCount > 0) || b.totalUsd - a.totalUsd,
+  );
+  const topId = ordered.find((p) => p.totalUsd > 0)?.platformId;
+  return (
+    <div className="mt-2.5">
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        By platform
+      </p>
+      <ul className="space-y-1">
+        {ordered.map((p) => {
+          const label = labels[p.platformId] ?? { short: p.platformId, full: p.platformId };
+          const streamed = p.dayCount > 0;
+          const isTop = p.platformId === topId;
+          const share =
+            p.shareOfTotal !== null ? Math.max(0, Math.min(1, p.shareOfTotal)) : 0;
+          return (
+            <li
+              key={p.platformId}
+              className={cn("rounded border border-border/60 px-2 py-1.5", !streamed && "opacity-50")}
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="min-w-0 truncate">
+                  <span className="font-semibold text-foreground">{label.short}</span>{" "}
+                  <span className="text-muted-foreground">{label.full}</span>
+                  {isTop && (
+                    <span className="ml-1.5 rounded bg-emerald-500/15 px-1 py-px text-[9px] font-bold uppercase text-emerald-400">
+                      Top
+                    </span>
+                  )}
+                </span>
+                <span className="numeric shrink-0 font-semibold text-foreground">
+                  {streamed ? fmtUsd(p.totalUsd) : "—"}
+                </span>
+              </div>
+              {streamed ? (
+                <div className="mt-1 flex items-center gap-2">
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-secondary/60">
+                    <div
+                      className={cn("h-full rounded-sm", isTop ? "bg-emerald-400" : "bg-muted-foreground/50")}
+                      style={{ width: `${share * 100}%` }}
+                    />
+                  </div>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {p.shareOfTotal !== null ? `${Math.round(p.shareOfTotal * 100)}% · ` : ""}avg{" "}
+                    {fmtUsd(p.avgUsd ?? 0)} over {plural(p.dayCount, "day")}
+                  </span>
+                </div>
+              ) : (
+                <p className="mt-0.5 text-[10px] text-muted-foreground">
+                  Didn't stream on a {stat.name} in this period
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/** One line per selected platform: the weekday it earns the most on, if there's enough history to say. */
+function PlatformBestDays({
+  stats,
+  platformIds,
+  labels,
+}: {
+  stats: WeekdayStat[];
+  platformIds: string[];
+  labels: PlatformLabels;
+}) {
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        Each platform's best day
+      </p>
+      <ul className="grid gap-1 sm:grid-cols-2">
+        {platformIds.map((id) => {
+          const label = labels[id] ?? { short: id, full: id };
+          const best = bestWeekdayForPlatform(stats, id);
+          return (
+            <li
+              key={id}
+              className="flex items-baseline justify-between gap-2 rounded border border-border/60 px-2 py-1 text-[11px]"
+            >
+              <span className="min-w-0 truncate">
+                <span className="font-semibold text-foreground">{label.short}</span>{" "}
+                <span className="text-muted-foreground">{label.full}</span>
+              </span>
+              {best ? (
+                <span className="shrink-0 text-right">
+                  <span className="font-semibold text-emerald-400">{best.name}</span>{" "}
+                  <span className="numeric text-foreground">{fmtUsd(best.avgUsd)}</span>
+                  <span className="text-muted-foreground"> avg · {best.dayCount}d</span>
+                </span>
+              ) : (
+                <span className="shrink-0 text-muted-foreground">not enough history yet</span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function WeekdayEarnings({
+  rows,
+  selectedIds,
+  start,
+  end,
+  platformLabels,
+}: {
+  rows: EntryRow[];
+  selectedIds: string[];
+  start: string;
+  end: string;
+  platformLabels: PlatformLabels;
+}) {
+  const [openDay, setOpenDay] = useState<number | null>(null);
+  const { stats, bestWeekday, comparable, streamingDays } = useMemo(
+    () => computeWeekdayStats(rows, selectedIds, start, end),
+    [rows, selectedIds, start, end],
+  );
+  const maxAvg = Math.max(0, ...stats.map((s) => s.avgUsd ?? 0));
+  const best: WeekdayStat | undefined = bestWeekday !== null ? stats[bestWeekday] : undefined;
+
+  return (
+    <div className="rounded-lg border border-border bg-panel p-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <p className="label-micro">Earnings by day of week</p>
+        <p className="text-[10px] text-muted-foreground">
+          Average per streaming day · {start} → {end}
+        </p>
+      </div>
+
+      {streamingDays === 0 ? (
+        <p className="py-10 text-center text-xs text-muted-foreground">
+          No streaming days recorded for this range/platform selection yet.
+        </p>
+      ) : (
+        <>
+          {best ? (
+            <div className="mb-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-400">
+              <p>
+              <span className="font-semibold">Best day: {best.name}</span> —{" "}
+              <span className="numeric font-semibold">{fmtUsd(best.avgUsd ?? 0)}</span> average
+              across {plural(best.dayCount, "streaming day")}
+              {best.dayCount < EARLY_INDICATION_DAYS && (
+                <span className="text-emerald-400/80">
+                  {" "}
+                  · early indication only, based on {best.dayCount} days
+                </span>
+              )}
+              </p>
+              {best.dayCount >= 3 && best.topDayShare !== null && best.topDayShare > 0.5 && best.bestDay && (
+                <p className="mt-1 text-amber-400">
+                  Caution: {Math.round(best.topDayShare * 100)}% of {best.name}'s total came from a
+                  single day ({shortDate(best.bestDay.date)}). Tap {best.name} below to see whether
+                  it's consistently strong or just that one day.
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="mb-3 rounded-md border border-border bg-console/40 px-3 py-2 text-xs text-muted-foreground">
+              {comparable
+                ? "No weekday has a positive average in this period yet."
+                : "Not enough history to name a best day yet — each weekday needs at least 2 streaming days, and at least 2 weekdays need to qualify. The bars below show what's recorded so far."}
+            </p>
+          )}
+
+          <ul className="space-y-0.5">
+            {stats.map((s) => {
+              const isBest = s.weekday === bestWeekday;
+              const open = openDay === s.weekday;
+              const width =
+                maxAvg > 0 && s.avgUsd !== null && s.avgUsd > 0
+                  ? Math.max((s.avgUsd / maxAvg) * 78, 2)
+                  : 0;
+              return (
+                <li key={s.weekday}>
+                  <button
+                    type="button"
+                    onClick={() => setOpenDay(open ? null : s.weekday)}
+                    aria-expanded={open}
+                    className="w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-secondary/40"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={cn(
+                          "w-20 shrink-0 text-xs font-medium sm:w-24",
+                          isBest ? "text-emerald-400" : "text-foreground",
+                        )}
+                      >
+                        {s.name}
+                      </span>
+                      <div className="flex min-w-0 flex-1 items-center gap-2">
+                        {s.avgUsd === null ? (
+                          <span className="text-[11px] text-muted-foreground">
+                            No streams recorded
+                          </span>
+                        ) : (
+                          <>
+                            <div
+                              className={cn(
+                                "h-5 rounded-sm",
+                                isBest ? "bg-emerald-400" : "bg-muted-foreground/40",
+                              )}
+                              style={{ width: `${width}%` }}
+                            />
+                            <span
+                              className={cn(
+                                "numeric shrink-0 text-xs font-semibold",
+                                isBest ? "text-emerald-400" : "text-foreground",
+                              )}
+                            >
+                              {fmtUsd(s.avgUsd)}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    {s.avgUsd !== null && (
+                      <p className="ml-[5.75rem] mt-0.5 text-[10px] text-muted-foreground sm:ml-[6.75rem]">
+                        {plural(s.dayCount, "day")} · {fmtUsd(s.totalUsd)} total
+                        {!s.reliable && " · low sample"}
+                      </p>
+                    )}
+                  </button>
+
+                  {open && (
+                    <div className="mx-2 mb-2 rounded-md border border-border bg-console/40 p-2.5 text-[11px]">
+                      {s.dayCount === 0 || s.bestDay === null ? (
+                        <p className="text-muted-foreground">
+                          No {s.name}s with recorded streaming in this period.
+                        </p>
+                      ) : (
+                        <>
+                          <p className="text-muted-foreground">
+                            {plural(s.dayCount, "streaming day")} · total{" "}
+                            <span className="numeric font-semibold text-foreground">
+                              {fmtUsd(s.totalUsd)}
+                            </span>{" "}
+                            · best single day{" "}
+                            <span className="numeric font-semibold text-foreground">
+                              {fmtUsd(s.bestDay.usd)}
+                            </span>{" "}
+                            ({shortDate(s.bestDay.date)})
+                          </p>
+                          {!s.reliable && (
+                            <p className="mt-1 text-amber-400">
+                              Only {plural(s.dayCount, "streaming day")} — too few to treat this
+                              average as a pattern.
+                            </p>
+                          )}
+                          {s.reliable &&
+                            s.dayCount >= 3 &&
+                            s.topDayShare !== null &&
+                            s.topDayShare > 0.5 && (
+                              <p className="mt-1 text-amber-400">
+                                {Math.round(s.topDayShare * 100)}% of this total came from one day (
+                                {shortDate(s.bestDay.date)}) — the average may be flattering.
+                              </p>
+                            )}
+                          <PlatformBreakdown stat={s} labels={platformLabels} />
+                          <p className="mb-1 mt-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                            Individual days (all selected platforms combined)
+                          </p>
+                          <ul className="max-h-40 space-y-0.5 overflow-y-auto pr-1">
+                            {s.days.map((d) => (
+                              <li key={d.date} className="flex justify-between text-muted-foreground">
+                                <span>{shortDate(d.date)}</span>
+                                <span className="numeric text-foreground">{fmtUsd(d.usd)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+          <PlatformBestDays stats={stats} platformIds={selectedIds} labels={platformLabels} />
+
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            Averaged over days you actually streamed, not every calendar day — nights off aren't
+            counted. Tap a day to see what's behind its figure.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function Analytics() {
   const { platforms, rows } = useTokenTrack();
   const today = todayISO();
@@ -133,18 +435,7 @@ export function Analytics() {
   const [customStart, setCustomStart] = useState(shiftDate(today, -30));
   const [customEnd, setCustomEnd] = useState(today);
   const [metric, setMetric] = useState<MetricKey>("usd");
-  // null = "not touched yet" -> default selection. Once touched, the choice is
-  // remembered in this browser so the toggles stay where you left them.
-  const [selected, setSelected] = useState<string[] | null>(loadSelectedPlatforms);
-
-  useEffect(() => {
-    if (selected === null) return;
-    try {
-      window.localStorage.setItem(SELECTED_PLATFORMS_KEY, JSON.stringify(selected));
-    } catch {
-      /* storage unavailable — toggles just won't persist */
-    }
-  }, [selected]);
+  const [selected, setSelected] = useState<string[] | null>(null); // null = "not touched yet" -> default selection
 
   const selectedIds = selected ?? platforms.filter((p) => p.status !== "inactive").map((p) => p.id);
 
@@ -205,37 +496,6 @@ export function Analytics() {
     return { totalUsd, totalTokens, totalHours, avgUsdPerHour, avgTokensPerHour, followerChange };
   }, [statsByPlatform, selectedIds]);
 
-  // ── Second row of metric cards — all built from the exact same
-  // date-range/platform-filtered inputs as the cards above, so they
-  // automatically respect both controls without any extra wiring.
-  const bestDayResult = useMemo(
-    () => bestDay(rows, selectedIds, start, end, dataEarliest),
-    [rows, selectedIds, start, end, dataEarliest],
-  );
-  const bestTimeResult = useMemo(
-    () => bestTimeOfDay(rows, selectedIds, start, end),
-    [rows, selectedIds, start, end],
-  );
-  const bestSessionResult = useMemo(
-    () => bestSession(rows, selectedIds, start, end, dataEarliest),
-    [rows, selectedIds, start, end, dataEarliest],
-  );
-  const followersPerHour =
-    combined.followerChange !== null && combined.totalHours > 0
-      ? Math.round((combined.followerChange / combined.totalHours) * 100) / 100
-      : null;
-  const sessionCount = useMemo(
-    () =>
-      statsByPlatform
-        .filter((s) => selectedIds.includes(s.platformId))
-        .reduce((sum, s) => sum + s.sessionCount, 0),
-    [statsByPlatform, selectedIds],
-  );
-  const bestPlatformId = useMemo(
-    () => bestPerformingPlatform(statsByPlatform.filter((s) => selectedIds.includes(s.platformId))),
-    [statsByPlatform, selectedIds],
-  );
-
   const { points: seriesPoints, granularity } = useMemo(
     () => buildTimeSeries(rows, selectedIds, metric, start, end),
     [rows, selectedIds, metric, start, end],
@@ -286,10 +546,7 @@ export function Analytics() {
 
   const cumulativeChartConfig = useMemo<ChartConfig>(
     () => ({
-      average: {
-        label: `${TREND_WINDOW}-day average, all selected platforms combined`,
-        color: "#34d399",
-      },
+      average: { label: `${TREND_WINDOW}-day average, all selected platforms combined`, color: "#34d399" },
     }),
     [],
   );
@@ -424,38 +681,6 @@ export function Analytics() {
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        <SummaryCard
-          label="Best day"
-          value={bestDayResult ? `${fmtUsd(bestDayResult.totalUsd)}` : "—"}
-          sub={bestDayResult?.date}
-        />
-        <SummaryCard
-          label="Best time"
-          value={bestTimeResult ? bestTimeResult.band : "—"}
-          sub={bestTimeResult ? fmtUsd(bestTimeResult.totalUsd) : undefined}
-        />
-        <SummaryCard
-          label="Best session"
-          value={bestSessionResult ? fmtUsd(bestSessionResult.usdValue) : "—"}
-          sub={
-            bestSessionResult
-              ? `${platformName(bestSessionResult.platformId)} · ${bestSessionResult.date}`
-              : undefined
-          }
-        />
-        <SummaryCard
-          label="Followers / hr"
-          value={
-            followersPerHour !== null
-              ? `${followersPerHour > 0 ? "+" : ""}${fmtNum(followersPerHour)}`
-              : "—"
-          }
-        />
-        <SummaryCard label="Sessions" value={fmtNum(sessionCount)} />
-        <SummaryCard label="Best platform" value={platformName(bestPlatformId)} />
-      </div>
-
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
         <InsightCard
           icon={<TrendingUp className="size-3.5" />}
@@ -526,9 +751,9 @@ export function Analytics() {
         </div>
         {!isCumulativeMetric ? (
           <p className="py-16 text-center text-xs text-muted-foreground">
-            A per-hour rate can't be combined across multiple platforms by simple addition — switch
-            the metric above to USD, Tokens, Hours, or Followers to see the growth trend across your
-            whole lineup.
+            A per-hour rate can't be combined across multiple platforms by simple addition —
+            switch the metric above to USD, Tokens, Hours, or Followers to see the growth trend
+            across your whole lineup.
           </p>
         ) : cumulativeData.length === 0 || selectedIds.length === 0 ? (
           <p className="py-16 text-center text-xs text-muted-foreground">
@@ -559,6 +784,16 @@ export function Analytics() {
           </ChartContainer>
         )}
       </div>
+
+      <WeekdayEarnings
+        rows={rows}
+        selectedIds={selectedIds}
+        start={start}
+        end={end}
+        platformLabels={Object.fromEntries(
+          platforms.map((p) => [p.id, { short: p.displayName?.trim() || p.name, full: p.name }]),
+        )}
+      />
 
       <div className="overflow-x-auto rounded-lg border border-border bg-panel">
         <table className="w-full min-w-[860px] text-xs">
@@ -633,20 +868,11 @@ export function Analytics() {
   );
 }
 
-function SummaryCard({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: string;
-  sub?: string | undefined;
-}) {
+function SummaryCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-panel px-3 py-2.5">
       <p className="label-micro">{label}</p>
       <p className="numeric mt-0.5 text-lg font-semibold leading-none">{value}</p>
-      {sub && <p className="numeric mt-1 truncate text-[10px] text-muted-foreground">{sub}</p>}
     </div>
   );
 }

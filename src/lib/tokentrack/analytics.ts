@@ -1,5 +1,5 @@
 import type { DerivedRow, EntryRow } from "./types";
-import { deriveRow, timeOfDayFrom } from "./store";
+import { deriveRow } from "./store";
 
 export type MetricKey = "usd" | "tokens" | "usdPerHour" | "tokensPerHour" | "followers" | "hours";
 
@@ -359,118 +359,220 @@ export function buildTimeSeries(
   };
 }
 
-// ── Added for the second row of Analytics metric cards ───────────────────
-// These are purely additive — every existing function above is untouched,
-// and none of these change what any existing card computes or displays.
-
-/** Same shape as rowsInRange, but for a set of selected platforms rather than one/"all". */
-function rowsInRangeForPlatforms(
-  rows: EntryRow[],
-  platformIds: string[],
-  start: string,
-  end: string,
-): EntryRow[] {
-  return rows.filter((r) => platformIds.includes(r.platformId) && r.date >= start && r.date <= end);
-}
-
-export interface BestDayResult {
-  date: string;
-  totalUsd: number;
-}
-
-/**
- * Highest-earning single calendar day — summed across every selected
- * platform — within the range.
- *
- * `excludeDate`, when given, drops rows dated that day before picking a
- * winner — intended for the single baseline/opening day (the earliest
- * date across the whole dataset), whose figure is historical catch-up
- * data rather than a normal comparable streaming day. This affects only
- * this one calculation: the excluded day still counts normally
- * everywhere else (totals, charts, averages, platform stats).
- */
-export function bestDay(
-  rows: EntryRow[],
-  platformIds: string[],
-  start: string,
-  end: string,
-  excludeDate?: string,
-): BestDayResult | null {
-  const inRange = rowsInRangeForPlatforms(rows, platformIds, start, end);
-  const derived = toDerived(excludeDate ? inRange.filter((r) => r.date !== excludeDate) : inRange);
-  if (derived.length === 0) return null;
-  const byDate = new Map<string, number>();
-  for (const r of derived) byDate.set(r.date, (byDate.get(r.date) ?? 0) + r.usdValue);
-  let best: BestDayResult | null = null;
-  for (const [date, totalUsd] of byDate) {
-    if (!best || totalUsd > best.totalUsd) best = { date, totalUsd: round2(totalUsd) };
-  }
-  return best;
-}
-
-export interface BestTimeResult {
-  band: string;
-  totalUsd: number;
-}
-
-/**
- * Strongest time-of-day band (Night/Morning/Afternoon/Evening) by total USD,
- * across the selected platforms within the range. Uses each row's own
- * recorded `timeOfDay` when present (falling back to deriving it from
- * `startTime` for older rows that predate that field) — never re-buckets
- * using today's band boundaries if they ever change, consistent with how
- * the time was actually recorded. Sessions with no time of day at all are
- * excluded, since there's nothing to band them by.
- */
-export function bestTimeOfDay(
-  rows: EntryRow[],
-  platformIds: string[],
-  start: string,
-  end: string,
-): BestTimeResult | null {
-  const derived = toDerived(rowsInRangeForPlatforms(rows, platformIds, start, end));
-  const byBand = new Map<string, number>();
-  for (const r of derived) {
-    const band = r.timeOfDay ?? timeOfDayFrom(r.startTime);
-    if (!band) continue;
-    byBand.set(band, (byBand.get(band) ?? 0) + r.usdValue);
-  }
-  let best: BestTimeResult | null = null;
-  for (const [band, totalUsd] of byBand) {
-    if (!best || totalUsd > best.totalUsd) best = { band, totalUsd: round2(totalUsd) };
-  }
-  return best;
-}
-
-export interface BestSessionResult {
-  date: string;
-  platformId: string;
-  usdValue: number;
-}
-
-/**
- * The single highest-earning individual session (one logged row) across
- * the selected platforms within the range.
- *
- * `excludeDate` works exactly as in `bestDay` above — excludes the
- * baseline/opening day from contention here only, never from any other
- * calculation.
- */
-export function bestSession(
-  rows: EntryRow[],
-  platformIds: string[],
-  start: string,
-  end: string,
-  excludeDate?: string,
-): BestSessionResult | null {
-  const inRange = rowsInRangeForPlatforms(rows, platformIds, start, end);
-  const derived = toDerived(excludeDate ? inRange.filter((r) => r.date !== excludeDate) : inRange);
-  if (derived.length === 0) return null;
-  const best = derived.reduce((b, r) => (r.usdValue > b.usdValue ? r : b));
-  return { date: best.date, platformId: best.platformId, usdValue: round2(best.usdValue) };
-}
-
 export function earliestDate(rows: EntryRow[], fallback: string): string {
   if (rows.length === 0) return fallback;
   return rows.reduce((min, r) => (r.date < min ? r.date : min), rows[0]?.date ?? fallback);
+}
+
+// ── Earnings by day of week ────────────────────────────────
+
+export const WEEKDAY_NAMES = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+] as const;
+
+/**
+ * A weekday needs at least this many streaming days before it's allowed to
+ * be called "best". With one or two nights behind a weekday's average, a
+ * single lucky session can make it look like a pattern when it isn't.
+ */
+export const WEEKDAY_MIN_DAYS = 2;
+
+export interface WeekdayDay {
+  date: string;
+  usd: number;
+}
+
+/** One platform's results on one day of the week. */
+export interface WeekdayPlatformStat {
+  platformId: string;
+  /** Days this platform actually streamed on this weekday (its own count, not the combined one). */
+  dayCount: number;
+  totalUsd: number;
+  /** Average USD per day THIS platform streamed on this weekday; null when it never did. */
+  avgUsd: number | null;
+  /** This platform's share of the weekday's combined earnings; null when the combined total is <= 0. */
+  shareOfTotal: number | null;
+}
+
+export interface WeekdayStat {
+  /** 0 = Monday … 6 = Sunday. */
+  weekday: number;
+  name: string;
+  /** Every streaming day behind this weekday's figures, newest first. */
+  days: WeekdayDay[];
+  dayCount: number;
+  totalUsd: number;
+  /** Average USD per streaming day (not per calendar day); null when there are none. */
+  avgUsd: number | null;
+  bestDay: WeekdayDay | null;
+  /** Share of this weekday's total that came from its single best day; null when total <= 0. */
+  topDayShare: number | null;
+  /** Enough streaming days (>= WEEKDAY_MIN_DAYS) to trust the average. */
+  reliable: boolean;
+  /**
+   * The same earnings split by platform — one entry per SELECTED platform, in
+   * the order given, including platforms that didn't stream that weekday (so
+   * every selected platform is always individually visible).
+   */
+  platforms: WeekdayPlatformStat[];
+}
+
+export interface WeekdayAnalysis {
+  /** Always seven entries, Monday first. */
+  stats: WeekdayStat[];
+  /** Index of the highest-average reliable weekday, or null when it can't be called yet. */
+  bestWeekday: number | null;
+  /** Distinct streaming days across the whole period. */
+  streamingDays: number;
+  /** At least two weekdays have enough data to be compared against each other. */
+  comparable: boolean;
+}
+
+/**
+ * Weekday of a yyyy-mm-dd date string, Monday = 0. Date-only strings parse
+ * as UTC midnight, and the UTC getter is used to match — the same
+ * timezone-safe convention as the rest of this file — so a date's weekday
+ * never shifts with the viewer's timezone.
+ */
+function weekdayIndex(date: string): number | null {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return null;
+  return (d.getUTCDay() + 6) % 7;
+}
+
+/**
+ * Average USD earned per STREAMING day, for each day of the week.
+ *
+ * Follows the app's existing rules rather than inventing new ones:
+ *  - A session belongs to its entry's `date`, wherever it ends (one that
+ *    crosses midnight stays on its start date — exactly how the rest of the
+ *    app already treats it), so no earnings are ever counted on two days.
+ *  - Earnings are deriveRow().usdValue — the same figure the existing
+ *    totals use. Payouts are a separate record and never enter this.
+ *  - Entries from all selected platforms on one date are combined into one
+ *    "streaming day", so the average means "a typical night's take".
+ *  - A date only counts as a streaming day if something was actually
+ *    recorded on it: earnings, or session time. Averaging over every
+ *    calendar day instead would punish weekdays for nights off.
+ */
+export function computeWeekdayStats(
+  rows: EntryRow[],
+  platformIds: string[],
+  start: string,
+  end: string,
+): WeekdayAnalysis {
+  const ids = new Set(platformIds);
+  const byDate = new Map<
+    string,
+    { usd: number; active: boolean; per: Map<string, { usd: number; active: boolean }> }
+  >();
+
+  for (const row of rows) {
+    if (!ids.has(row.platformId) || row.date < start || row.date > end) continue;
+    const d = deriveRow(row);
+    const cur = byDate.get(row.date) ?? { usd: 0, active: false, per: new Map() };
+    cur.usd += d.usdValue;
+    const worked = d.usdValue !== 0 || d.minutesValue > 0;
+    if (worked) cur.active = true;
+    const plat = cur.per.get(row.platformId) ?? { usd: 0, active: false };
+    plat.usd += d.usdValue;
+    if (worked) plat.active = true;
+    cur.per.set(row.platformId, plat);
+    byDate.set(row.date, cur);
+  }
+
+  const buckets: WeekdayDay[][] = WEEKDAY_NAMES.map(() => []);
+  let streamingDays = 0;
+  for (const [date, v] of byDate) {
+    if (!v.active) continue;
+    const idx = weekdayIndex(date);
+    if (idx === null) continue;
+    buckets[idx]?.push({ date, usd: round2(v.usd) });
+    streamingDays += 1;
+  }
+
+  const stats: WeekdayStat[] = WEEKDAY_NAMES.map((name, weekday) => {
+    const days = [...(buckets[weekday] ?? [])].sort((a, b) => (a.date < b.date ? 1 : -1));
+    const dayCount = days.length;
+    const totalUsd = round2(days.reduce((s, x) => s + x.usd, 0));
+    const bestDay = days.reduce<WeekdayDay | null>(
+      (best, x) => (best === null || x.usd > best.usd ? x : best),
+      null,
+    );
+    // Platform split for this weekday. Uses the same streaming-day rule per
+    // platform, so a platform's average is "per day IT streamed", and the
+    // platforms' totals add up to the combined total above.
+    const combinedRaw = days.reduce((sum, x) => sum + (byDate.get(x.date)?.usd ?? 0), 0);
+    const platformStats: WeekdayPlatformStat[] = [...new Set(platformIds)].map((platformId) => {
+      let pDays = 0;
+      let pTotal = 0;
+      for (const x of days) {
+        const p = byDate.get(x.date)?.per.get(platformId);
+        if (p && p.active) pDays += 1;
+        if (p) pTotal += p.usd;
+      }
+      return {
+        platformId,
+        dayCount: pDays,
+        totalUsd: round2(pTotal),
+        avgUsd: pDays > 0 ? round2(pTotal / pDays) : null,
+        shareOfTotal: combinedRaw > 0 ? pTotal / combinedRaw : null,
+      };
+    });
+    return {
+      weekday,
+      name,
+      days,
+      dayCount,
+      totalUsd,
+      avgUsd: dayCount > 0 ? round2(totalUsd / dayCount) : null,
+      bestDay,
+      topDayShare: bestDay && totalUsd > 0 ? bestDay.usd / totalUsd : null,
+      reliable: dayCount >= WEEKDAY_MIN_DAYS,
+      platforms: platformStats,
+    };
+  });
+
+  const reliable = stats.filter((s) => s.reliable && s.avgUsd !== null);
+  const comparable = reliable.length >= 2;
+  let bestWeekday: number | null = null;
+  if (comparable) {
+    const top = reliable.reduce((a, b) => ((b.avgUsd ?? 0) > (a.avgUsd ?? 0) ? b : a));
+    if ((top.avgUsd ?? 0) > 0) bestWeekday = top.weekday;
+  }
+
+  return { stats, bestWeekday, streamingDays, comparable };
+}
+
+/**
+ * The weekday a single platform earns the most on, or null when there isn't
+ * enough history to say. Same standard as the combined "best day": a weekday
+ * only qualifies with at least WEEKDAY_MIN_DAYS of that platform's own
+ * streaming days, and at least two weekdays must qualify before one is named.
+ */
+export function bestWeekdayForPlatform(
+  stats: WeekdayStat[],
+  platformId: string,
+): { weekday: number; name: string; avgUsd: number; dayCount: number } | null {
+  const qualifying = stats
+    .map((s) => ({ s, p: s.platforms.find((x) => x.platformId === platformId) }))
+    .filter(
+      (x): x is { s: WeekdayStat; p: WeekdayPlatformStat } =>
+        x.p !== undefined && x.p.dayCount >= WEEKDAY_MIN_DAYS && x.p.avgUsd !== null,
+    );
+  if (qualifying.length < 2) return null;
+  const top = qualifying.reduce((a, b) => ((b.p.avgUsd ?? 0) > (a.p.avgUsd ?? 0) ? b : a));
+  if ((top.p.avgUsd ?? 0) <= 0) return null;
+  return {
+    weekday: top.s.weekday,
+    name: top.s.name,
+    avgUsd: top.p.avgUsd ?? 0,
+    dayCount: top.p.dayCount,
+  };
 }
